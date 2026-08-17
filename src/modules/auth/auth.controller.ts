@@ -1,10 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
@@ -46,7 +41,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Log in',
     description:
-      'Returns tokens in the response BODY, not as cookies (TR-DEC-001). Only NextAuth\'s ' +
+      "Returns tokens in the response BODY, not as cookies (TR-DEC-001). Only NextAuth's " +
       'server side consumes this; the refresh token never reaches the browser (TR-DEC-018).',
   })
   @ApiResponse({ status: 200, type: AuthResponseDto })

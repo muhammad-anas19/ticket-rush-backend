@@ -92,7 +92,7 @@ async function bootstrap(): Promise<void> {
   // in them, so this is defence in depth: the day someone returns a `User` entity directly from
   // a new endpoint, the hash is still stripped rather than published.
   app.useGlobalInterceptors(
-    new ResponseEnvelopeInterceptor(app.get(Reflector)),
+    new ResponseEnvelopeInterceptor(),
     new ClassSerializerInterceptor(app.get(Reflector)),
   );
   app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost)));

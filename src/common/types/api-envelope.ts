@@ -15,12 +15,23 @@ export interface ApiEnvelope<T> {
 export interface ApiErrorEnvelope {
   success: false;
   data: null;
+  /** Always a human-readable string. Never an object — see `details` for structured payloads. */
   message: string;
   statusCode: number;
   path: string;
   timestamp: string;
   /** Field-level validation errors, when the failure came from the ValidationPipe. */
   errors?: string[];
+  /**
+   * Structured detail from exceptions whose payload is an object rather than a message —
+   * `@nestjs/terminus` health results being the case that forced this.
+   *
+   * It exists so `message` can stay honestly typed as a string. Before this, a Terminus
+   * failure put its whole `{ status, info, error, details }` object into `message`, which
+   * satisfied the compiler (the filter built the object loosely) but lied to every consumer
+   * reading `message` as text.
+   */
+  details?: unknown;
 }
 
 /**

@@ -1,10 +1,8 @@
-import { Controller, Get, UseFilters } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckService, TypeOrmHealthIndicator } from '@nestjs/terminus';
 
 import { Public } from '../../common/decorators/public.decorator';
-import { SkipEnvelope } from '../../common/decorators/skip-envelope.decorator';
-import { HealthExceptionFilter } from './health-exception.filter';
 import { RedisHealthIndicator } from './indicators/redis.health';
 
 /**
@@ -12,15 +10,21 @@ import { RedisHealthIndicator } from './indicators/redis.health';
  * partial outage becomes a total one — see qa/phase-0 Q6.
  *
  * These routes are excluded from the global `/api` prefix (see main.ts) because ops tooling
- * expects health checks at conventional unprefixed paths, and skip the response envelope
- * because Terminus's own output shape is what probes are written to parse.
+ * expects health checks at conventional unprefixed paths.
+ *
+ * They DO go through the standard response envelope, like everything else. An earlier version
+ * opted out with `@SkipEnvelope()` plus a controller-scoped filter, to preserve Terminus's own
+ * output shape for probes written against it. That was dropped in favour of one contract with no
+ * exceptions: Terminus's result now arrives nested — under `data` on success, under `details` on
+ * failure — and a probe reads `data.status` rather than `status`.
+ *
+ * The tradeoff is small because probes overwhelmingly key on the HTTP STATUS CODE, which is
+ * unchanged: 200 healthy, 503 not. What the special case bought was compatibility with tooling
+ * that parses the body verbatim; what it cost was two mechanisms and an endpoint whose shape
+ * differed from every other one.
  */
 @ApiTags('health')
 @Controller('health')
-// SkipEnvelope covers the success path (the interceptor); the filter covers the failure path.
-// Both are needed — see health-exception.filter.ts for why that isn't obvious.
-@SkipEnvelope()
-@UseFilters(HealthExceptionFilter)
 // Required from M1, because JwtAuthGuard is now global and fails closed. A liveness probe that
 // needed a Bearer token would be useless — an orchestrator has no credentials, so every instance
 // would look dead and be restarted forever. Health checks are the canonical @Public() route.

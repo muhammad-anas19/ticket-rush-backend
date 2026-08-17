@@ -11,6 +11,30 @@ import {
 import { User } from '../../users/entities/user.entity';
 
 /**
+ * Why a token stopped being live.
+ *
+ * This column exists because of a real bug found by testing the failure path (see the M1
+ * walkthrough). Originally `revokedAt` alone carried two completely different meanings —
+ * "spent by a normal rotation" and "killed because we suspect theft" — and the grace window
+ * could not tell them apart.
+ *
+ * The consequence was severe: reuse detection revoked the family, and then any token in that
+ * family presented within the next 30 seconds landed in the grace branch and was issued a fresh
+ * pair. **A revoked session could resurrect itself.** Logout had the same hole.
+ *
+ * One timestamp answering two questions is the whole defect. Grace now applies only to
+ * `Rotated`; anything revoked for cause is permanently dead.
+ */
+export enum RevocationReason {
+  /** Spent by a normal refresh. Eligible for the TR-DEC-017 grace window. */
+  Rotated = 'rotated',
+  /** Killed by reuse detection. Never eligible for grace. */
+  ReuseDetected = 'reuse_detected',
+  /** Killed by an explicit logout. Never eligible for grace. */
+  Logout = 'logout',
+}
+
+/**
  * One row per refresh token ever issued.
  *
  * Rotation INSERTS a new row and marks the old one used — it never updates a token value in
@@ -65,14 +89,26 @@ export class RefreshToken {
   expiresAt: Date;
 
   /**
-   * Set when this token is spent (rotated) or revoked. NULL means live.
+   * Set when this token stops being live. NULL means live.
    *
-   * Doubles as the grace-window clock (TR-DEC-017): a token presented after being rotated is
-   * legitimate-but-late if `now - revokedAt <= REFRESH_GRACE_SECONDS`, and theft otherwise.
-   * One timestamp answers both "is this spent" and "how long ago" — no second column needed.
+   * Also the grace-window clock (TR-DEC-017): a rotated token presented again is
+   * legitimate-but-late if `now - revokedAt <= REFRESH_GRACE_SECONDS`.
+   *
+   * But the clock is only meaningful together with `revokedReason` — see that enum for the bug
+   * that proved it. A timestamp alone cannot distinguish "spent normally" from "killed for
+   * cause", and treating those the same lets a revoked session come back.
    */
   @Column({ type: 'timestamptz', name: 'revoked_at', nullable: true })
   revokedAt: Date | null;
+
+  /** NULL while live. See RevocationReason — grace applies to `Rotated` only. */
+  @Column({
+    type: 'enum',
+    enum: RevocationReason,
+    name: 'revoked_reason',
+    nullable: true,
+  })
+  revokedReason: RevocationReason | null;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;

@@ -7,6 +7,20 @@ import { User, UserRole } from './entities/user.entity';
 /** Postgres error code for a unique constraint violation. */
 const PG_UNIQUE_VIOLATION = '23505';
 
+/**
+ * TypeORM types `QueryFailedError.driverError` loosely, so the Postgres error code needs a
+ * narrowing type guard rather than an `any` cast. The code is the only reliable way to tell a
+ * duplicate-key violation from any other database failure — matching on the message text would
+ * break the moment Postgres reworded it or the locale changed.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    error instanceof QueryFailedError &&
+    typeof (error as QueryFailedError & { code?: unknown }).code === 'string' &&
+    (error as QueryFailedError & { code: string }).code === PG_UNIQUE_VIOLATION
+  );
+}
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -45,7 +59,7 @@ export class UsersService {
       // "available", both insert, and one must fail at the database anyway. So the constraint
       // is the real guard and this is just translating its error into a 409. Checking first
       // would add a query and still need this catch.
-      if (error instanceof QueryFailedError && (error as any).code === PG_UNIQUE_VIOLATION) {
+      if (isUniqueViolation(error)) {
         // Note this DOES leak that the address is registered. Unavoidable for registration —
         // the user has to be told why it failed. Login is the endpoint where enumeration must
         // be prevented, and it is handled there.

@@ -101,8 +101,21 @@ Enforced globally by `ResponseEnvelopeInterceptor` (wraps returns) + `AllExcepti
 throws). **Controllers never hand-build the envelope** — they return raw data or throw a plain
 `HttpException` subclass with a human-readable message.
 
+**No route opts out** (`TR-DEC-019`). Health endpoints included: Terminus's result arrives nested
+under `data`, and a probe reads `data.status`. If a future route genuinely cannot be wrapped (file
+download, SSE), it needs an interceptor opt-out **and** a matching filter — an interceptor only covers
+the success path, and a throw goes to the filter instead.
+
 ```ts
-interface ApiEnvelope<T> { success: boolean; data: T; message?: string; timestamp?: string }
+interface ApiEnvelope<T> { success: boolean; data: T; message?: string; timestamp: string }
+
+interface ApiErrorEnvelope {
+  success: false; data: null;
+  message: string;           // always a string — structured payloads go to `details`
+  statusCode: number; path: string; timestamp: string;
+  errors?: string[];         // field-level messages from the ValidationPipe
+  details?: unknown;         // e.g. a Terminus health result
+}
 
 interface PaginatedResponse<T> {
   data: T[]; total: number; page: number;
@@ -131,8 +144,9 @@ there.
 
 **The one route that breaks this pipeline:** `POST /api/webhooks/stripe`. It needs the **raw request
 body** for signature verification, so it must bypass JSON body parsing and the global
-`ValidationPipe`. See `docs/concepts/` when M5 lands — this is the single most common Stripe
-integration bug.
+`ValidationPipe`. Note this is a *request*-side exemption, not a response one — Stripe reads only the
+status code, so the envelope on the way out is harmless. See `docs/concepts/` when M5 lands; this is
+the single most common Stripe integration bug.
 
 ---
 

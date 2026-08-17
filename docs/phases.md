@@ -29,7 +29,7 @@ sessions**. Stated up front so being at session 20 doesn't read as falling behin
 | Module | Understanding check | Implementation |
 |---|---|---|
 | M0 | ✅ Graded — [qa/phase-0-foundation-understanding-check.md](qa/phase-0-foundation-understanding-check.md) | ✅ Complete & verified — [walkthroughs/m0-foundation-code-walkthrough.md](walkthroughs/m0-foundation-code-walkthrough.md) |
-| M1 | ◄ next | not started |
+| M1 | ✅ Graded — [qa/phase-1-auth-understanding-check.md](qa/phase-1-auth-understanding-check.md) | ✅ Backend complete & verified — [walkthroughs/m1-auth-code-walkthrough.md](walkthroughs/m1-auth-code-walkthrough.md) · frontend (NextAuth) next |
 | M2–M8 | not started | not started |
 
 **M0 checkpoint met.** Three containers healthy; API boots and connects to Postgres and Redis;

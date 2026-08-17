@@ -9,7 +9,7 @@ import { AppConfig } from '../../config/configuration';
 import { User, UserRole } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AuthResponseDto } from './dto/auth-response.dto';
-import { RefreshToken } from './entities/refresh-token.entity';
+import { RefreshToken, RevocationReason } from './entities/refresh-token.entity';
 import { PasswordService } from './password.service';
 
 /** Claims carried in the access token. Readable by anyone — signed, not encrypted. */
@@ -100,6 +100,24 @@ export class AuthService {
       const graceMs = this.config.get('auth.refreshGraceSeconds', { infer: true }) * 1000;
       const elapsedMs = Date.now() - stored.revokedAt.getTime();
 
+      /**
+       * Grace applies ONLY to a token spent by a normal rotation.
+       *
+       * This guard is the fix for a real bug: with `revokedAt` alone, a family killed by reuse
+       * detection could be RESURRECTED by presenting any of its tokens within the next 30
+       * seconds — the revocation timestamp was fresh, so the grace branch happily issued a new
+       * pair. Logout had the identical hole.
+       *
+       * A token revoked for cause is permanently dead, regardless of how recently.
+       */
+      if (stored.revokedReason !== RevocationReason.Rotated) {
+        this.logger.warn(
+          `Refresh attempted on a token revoked for cause ` +
+            `(${stored.revokedReason}) — user ${stored.userId}, family ${stored.familyId}`,
+        );
+        throw new UnauthorizedException('Session revoked');
+      }
+
       if (elapsedMs > graceMs) {
         // Past the window. Treat as theft.
         //
@@ -109,7 +127,7 @@ export class AuthService {
         //
         // This does log out the legitimate user too. That is the correct tradeoff — a session
         // that may be compromised should end, and the cost is one re-login.
-        await this.revokeFamily(stored.familyId);
+        await this.revokeFamily(stored.familyId, RevocationReason.ReuseDetected);
         this.logger.warn(
           `Refresh token reuse detected for user ${stored.userId} ` +
             `(family ${stored.familyId}, ${Math.round(elapsedMs / 1000)}s after rotation). ` +
@@ -137,7 +155,7 @@ export class AuthService {
     const user = await this.users.findById(stored.userId);
     if (!user) {
       // The user was deleted while a live session existed.
-      await this.revokeFamily(stored.familyId);
+      await this.revokeFamily(stored.familyId, RevocationReason.Logout);
       throw new UnauthorizedException('Session revoked');
     }
 
@@ -151,6 +169,7 @@ export class AuthService {
     // than an extra login.
     if (!stored.revokedAt) {
       stored.revokedAt = new Date();
+      stored.revokedReason = RevocationReason.Rotated;
       await this.refreshTokens.save(stored);
     }
 
@@ -167,15 +186,21 @@ export class AuthService {
     // retrying, or logging out twice, should not see an error for an action whose goal —
     // "this session is gone" — is already satisfied.
     if (stored) {
-      await this.revokeFamily(stored.familyId);
+      await this.revokeFamily(stored.familyId, RevocationReason.Logout);
       this.logger.log(`Logged out user ${stored.userId} (family ${stored.familyId})`);
     }
   }
 
-  private async revokeFamily(familyId: string): Promise<void> {
+  /**
+   * Kills every live token in the family.
+   *
+   * `reason` is not decoration — it is what stops a revoked family being resurrected by the
+   * grace window. Only `Rotated` is eligible for grace; `ReuseDetected` and `Logout` are final.
+   */
+  private async revokeFamily(familyId: string, reason: RevocationReason): Promise<void> {
     await this.refreshTokens.update(
       { familyId, revokedAt: IsNull() },
-      { revokedAt: new Date() },
+      { revokedAt: new Date(), revokedReason: reason },
     );
   }
 
@@ -209,6 +234,7 @@ export class AuthService {
         userId: user.id,
         expiresAt,
         revokedAt: null,
+        revokedReason: null,
       }),
     );
 

@@ -163,10 +163,14 @@ Fix: rename the data key to `connection`. `indicators/redis.health.ts` carries t
 
 ### `@SkipEnvelope()` only covered half the route
 
+> **Since resolved by removing the special case entirely** — health now goes through the standard
+> envelope like every other route. The lesson below is why the opt-out was harder than it looked,
+> and it is the reason the escape hatch was not worth keeping.
+
 With Redis stopped, readiness correctly returned 503 — wrapped in the error envelope, while the 200
 returned Terminus's raw shape. One endpoint, two response shapes.
 
-`@SkipEnvelope()` is read by `ResponseEnvelopeInterceptor`, and **an interceptor only wraps the
+`@SkipEnvelope()` was read by `ResponseEnvelopeInterceptor`, and **an interceptor only wraps the
 success path**. When a handler throws, the interceptor's `map` never runs, the exception sails past
 it, and `AllExceptionsFilter` produces the error body. Opting out of the interceptor says nothing
 about the filter.
@@ -177,12 +181,19 @@ That is the request lifecycle being load-bearing rather than trivia:
 Guards → Interceptors (pre) → Pipes → Handler → Interceptors (post) → Filters
 ```
 
-Fixed with `HealthExceptionFilter`, scoped to the controller via `@UseFilters` rather than added to
-`AllExceptionsFilter` — `common/` must not learn a specific module's response format.
+The first fix was a controller-scoped `HealthExceptionFilter` to preserve Terminus's shape on the
+error path too — two mechanisms to make one endpoint inconsistent with the rest of the API.
 
-In practice orchestrators read the status code and ignore the body, so this was harmless. It was
-fixed anyway because the stated reason for `@SkipEnvelope()` on that controller is "external tooling
-parses Terminus's documented structure," and that reasoning applies *most* when the check fails.
+**That was then dropped.** Health returns the standard envelope, so Terminus's result arrives nested
+(under `data` on success, under `details` on failure) and a probe reads `data.status` rather than
+`status`. Cheap, because probes key on the HTTP status code, which never changed: 200 healthy, 503
+not. What the special case bought was byte-level compatibility with body-parsing tooling; what it
+cost was two mechanisms and an endpoint shaped unlike every other. `@SkipEnvelope()` had no other
+user and was deleted with it.
+
+**The generalisable point survives the removal:** an interceptor and a filter are complementary, not
+two views of one thing. Opting out of one says nothing about the other — so if a future route
+genuinely cannot be enveloped (a file download, an SSE stream), it needs *both* pieces, deliberately.
 
 ### CORS does not reject anything
 

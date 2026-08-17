@@ -12,6 +12,25 @@ import { QueryFailedError } from 'typeorm';
 import { ApiErrorEnvelope } from '../types/api-envelope';
 
 /**
+ * Reason phrases for statuses we may return without a message of our own.
+ *
+ * Needed because Nest derives `exception.message` from the CLASS NAME when an exception is
+ * constructed with an object payload — a failing Terminus check produced the client-facing string
+ * "Service Unavailable Exception". Accurate, and not something to show anyone.
+ */
+const STATUS_TEXT: Record<number, string> = {
+  [HttpStatus.BAD_REQUEST]: 'Bad request',
+  [HttpStatus.UNAUTHORIZED]: 'Unauthorized',
+  [HttpStatus.FORBIDDEN]: 'Forbidden',
+  [HttpStatus.NOT_FOUND]: 'Not found',
+  [HttpStatus.CONFLICT]: 'Conflict',
+  [HttpStatus.UNPROCESSABLE_ENTITY]: 'Unprocessable entity',
+  [HttpStatus.TOO_MANY_REQUESTS]: 'Too many requests',
+  [HttpStatus.INTERNAL_SERVER_ERROR]: 'Internal server error',
+  [HttpStatus.SERVICE_UNAVAILABLE]: 'Service unavailable',
+};
+
+/**
  * Normalises every thrown error into one response shape.
  *
  * `@Catch()` with no argument catches everything — Nest's own HttpExceptions, TypeORM
@@ -38,7 +57,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const request = ctx.getRequest();
     const path: string = httpAdapter.getRequestUrl(request) ?? 'unknown';
 
-    const { status, message, errors } = this.normalise(exception);
+    const { status, message, errors, details } = this.normalise(exception);
 
     // `Number(...)` because `status` is a plain number while HttpStatus is an enum, and
     // comparing the two trips no-unsafe-enum-comparison. The rule is right to complain:
@@ -61,6 +80,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       path,
       timestamp: new Date().toISOString(),
       ...(errors ? { errors } : {}),
+      ...(details !== undefined ? { details } : {}),
     };
 
     httpAdapter.reply(ctx.getResponse(), body, status);
@@ -70,24 +90,56 @@ export class AllExceptionsFilter implements ExceptionFilter {
     status: number;
     message: string;
     errors?: string[];
+    details?: unknown;
   } {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const response = exception.getResponse();
 
-      // The global ValidationPipe throws a BadRequestException whose response body has a
-      // `message` array — one entry per failed constraint. Those are surfaced as-is:
-      // "email must be an email" helps the legitimate caller and leaks nothing about system
-      // state. Contrast with auth failures, which stay deliberately generic.
-      if (typeof response === 'object' && response !== null) {
-        const payload = response as { message?: string | string[]; error?: string };
-        if (Array.isArray(payload.message)) {
-          return { status, message: 'Validation failed', errors: payload.message };
-        }
-        return { status, message: payload.message ?? payload.error ?? exception.message };
+      if (typeof response === 'string') {
+        return { status, message: response };
       }
 
-      return { status, message: typeof response === 'string' ? response : exception.message };
+      if (typeof response === 'object' && response !== null) {
+        const payload = response as { message?: unknown; error?: unknown };
+
+        // The global ValidationPipe throws a BadRequestException whose response body has a
+        // `message` ARRAY — one entry per failed constraint. Surfaced as-is: "email must be an
+        // email" helps the legitimate caller and leaks nothing about system state. Contrast with
+        // auth failures, which stay deliberately generic.
+        if (Array.isArray(payload.message)) {
+          return {
+            status,
+            message: 'Validation failed',
+            errors: payload.message.map(String),
+          };
+        }
+
+        if (typeof payload.message === 'string') {
+          return { status, message: payload.message };
+        }
+
+        if (typeof payload.error === 'string') {
+          return { status, message: payload.error };
+        }
+
+        /**
+         * An object payload with no readable message. `@nestjs/terminus` is the case that
+         * matters: a failing health check throws a ServiceUnavailableException whose response is
+         * the whole `{ status, info, error, details }` result.
+         *
+         * The structured object goes to `details` and `message` gets the exception's own text,
+         * so `message` stays honestly a string. Previously this object landed IN `message`,
+         * which every consumer reading it as text would have mishandled.
+         */
+        return {
+          status,
+          message: STATUS_TEXT[status] ?? exception.message,
+          details: response,
+        };
+      }
+
+      return { status, message: exception.message };
     }
 
     if (exception instanceof QueryFailedError) {

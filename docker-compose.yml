@@ -1,0 +1,68 @@
+# TicketRush — containerised infrastructure.
+#
+#   docker compose up -d        from this folder (backend/)
+#   docker compose ps
+#   docker compose down         stops everything, KEEPS your data
+#   docker compose down -v      also deletes the volumes — deliberate, no undo
+#
+# What is NOT here, and why:
+#
+#   Postgres — runs natively on this machine (PostgreSQL 18, port 5432), managed with
+#              pgAdmin. See TR-DEC-015 for the tradeoff that choice makes.
+#
+#   The API  — runs on the host with `npm run start:dev`. Faster reload, a real debugger,
+#              and no bind-mount filesystem bridge in the way.
+#
+# An explicit project name. Without it, Compose derives one from the containing DIRECTORY —
+# which here would be "backend", and every volume would be named `backend_redis_data`.
+# Rename or move the folder and Compose silently creates a fresh set of volumes, leaving the
+# old data orphaned and looking for all the world like the database wiped itself.
+name: ticketrush
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ticketrush-redis
+    restart: unless-stopped
+    # appendonly survives restarts. Not strictly required — TR-DEC-007 makes Redis
+    # authoritative for nothing, so everything in it can be rebuilt from Postgres — but it
+    # makes local restarts less irritating.
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      # host:container. Nothing else is on 6379 locally, so no shift is needed.
+      - '6379:6379'
+    volumes:
+      # Named volume, not a bind mount: Docker-managed, correct permissions, native speed.
+      # Bind-mounting a datastore's files on Windows is a known source of slowness and
+      # occasional corruption.
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: ticketrush-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ticketrush}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ticketrush}
+    ports:
+      - '5672:5672'   # AMQP — what the app connects to
+      - '15672:15672' # management UI — http://localhost:15672
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # RabbitMQ genuinely is slow to boot. Without a start_period its own healthcheck fails
+      # while it is still starting and burns through the retries before it is ready.
+      start_period: 30s
+
+volumes:
+  redis_data:
+  rabbitmq_data:

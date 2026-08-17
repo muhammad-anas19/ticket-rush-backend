@@ -1,0 +1,23 @@
+# Everything here is excluded from the build context sent to the Docker daemon.
+# Two reasons: a smaller context builds faster, and secrets must never end up in an image
+# layer — layers are readable by anyone who can pull the image, even if a later layer
+# deletes the file.
+
+node_modules
+dist
+coverage
+
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+
+docs
+test
+*.spec.ts
+*.e2e-spec.ts
+
+npm-debug.log*
+.DS_Store

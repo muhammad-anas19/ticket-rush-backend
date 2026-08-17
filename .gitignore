@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Real secrets. `.env.example` is committed; `.env` never is.
+.env
+.env.local
+.env.*.local
+
+logs/
+*.log
+npm-debug.log*
+
+.DS_Store
+.idea/
+*.swp

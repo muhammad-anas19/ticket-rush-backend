@@ -1,0 +1,7 @@
+# Migrations land here from M2 onward.
+#
+# Generated with:  npm run migration:generate -- src/database/migrations/DescriptiveName
+# Applied with:    npm run migration:run
+#
+# Once a migration has been applied anywhere outside your own machine it is immutable.
+# Fix mistakes with a new migration, never by editing history.

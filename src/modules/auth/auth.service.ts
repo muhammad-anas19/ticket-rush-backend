@@ -32,14 +32,30 @@ export class AuthService {
     private readonly refreshTokens: Repository<RefreshToken>,
   ) {}
 
-  async register(email: string, password: string, role: UserRole): Promise<AuthResponseDto> {
+  /**
+   * Creates the account and returns the user. **Deliberately does NOT issue a session.**
+   *
+   * It used to return a token pair, which seemed friendly — sign the user straight in without a
+   * second round trip. It was a leak, found by querying the database after a sign-out.
+   *
+   * The frontend cannot use those tokens: NextAuth only establishes a session through its own
+   * `authorize()` callback, so `RegisterForm` registers and then calls `signIn()`, discarding
+   * whatever register returned. That discarded pair was a **live refresh-token family nobody held
+   * and nothing would ever revoke** — logout revokes the family of the token it is given, which is
+   * the sign-in family, so the register family survived its full 7 days. Every single signup leaked
+   * one.
+   *
+   * Issuing a credential that no client consumes is strictly a liability. If a future non-NextAuth
+   * client wants auto-login on signup, it should call `/auth/login` — the endpoint that exists for it.
+   */
+  async register(email: string, password: string, role: UserRole): Promise<User> {
     const passwordHash = await this.passwords.hash(password);
     // Throws 409 on the unique constraint. Registration necessarily reveals that an address is
     // taken — the user has to be told why it failed. Login is where enumeration is prevented.
     const user = await this.users.create(email, passwordHash, role);
 
     this.logger.log(`Registered ${user.id} as ${user.role}`);
-    return this.issueTokens(user, randomUUID());
+    return user;
   }
 
   async login(email: string, password: string): Promise<AuthResponseDto> {

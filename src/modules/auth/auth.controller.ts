@@ -24,13 +24,17 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register',
     description:
-      'Creates an account and returns tokens immediately. The role is self-selected — safe ' +
-      'here because organiser is a different capability, not a higher privilege (TR-DEC-003).',
+      'Creates an account and returns the user. Deliberately does NOT return tokens — call ' +
+      '/auth/login for a session. Returning a pair here leaked a live refresh-token family on ' +
+      'every signup, because the NextAuth client cannot use it and nothing ever revoked it. ' +
+      'The role is self-selected, safe because organiser is a different capability rather than a ' +
+      'higher privilege (TR-DEC-003).',
   })
-  @ApiResponse({ status: 201, type: AuthResponseDto })
+  @ApiResponse({ status: 201, type: UserResponseDto })
   @ApiResponse({ status: 409, description: 'Email already registered' })
-  async register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
-    return this.auth.register(dto.email, dto.password, dto.role);
+  async register(@Body() dto: RegisterDto): Promise<UserResponseDto> {
+    const user = await this.auth.register(dto.email, dto.password, dto.role);
+    return { id: user.id, email: user.email, role: user.role, createdAt: user.createdAt };
   }
 
   @Public()

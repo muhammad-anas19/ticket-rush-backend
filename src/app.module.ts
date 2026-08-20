@@ -8,6 +8,7 @@ import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { EventsModule } from './modules/events/events.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
 import { RedisModule } from './redis/redis.module';
@@ -34,8 +35,8 @@ import { RedisModule } from './redis/redis.module';
 
     UsersModule,
     AuthModule,
+    EventsModule,
 
-    // M2: EventsModule
     // M3: HoldsModule
     // M5: OrdersModule, StripeModule
     // M6: MessagingModule, TicketsModule

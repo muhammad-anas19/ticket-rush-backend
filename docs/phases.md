@@ -30,7 +30,9 @@ sessions**. Stated up front so being at session 20 doesn't read as falling behin
 |---|---|---|
 | M0 | ✅ Graded — [qa/phase-0-foundation-understanding-check.md](qa/phase-0-foundation-understanding-check.md) | ✅ Complete & verified — [walkthroughs/m0-foundation-code-walkthrough.md](walkthroughs/m0-foundation-code-walkthrough.md) |
 | M1 | ✅ Graded — [qa/phase-1-auth-understanding-check.md](qa/phase-1-auth-understanding-check.md) | ✅ Backend complete & verified — [walkthroughs/m1-auth-code-walkthrough.md](walkthroughs/m1-auth-code-walkthrough.md) · frontend (NextAuth) next |
-| M2–M8 | not started | not started |
+| M2 | ✅ Graded — [qa/phase-2-events-understanding-check.md](qa/phase-2-events-understanding-check.md) | ✅ Complete & verified — [walkthroughs/m2-events-code-walkthrough.md](walkthroughs/m2-events-code-walkthrough.md) |
+| M3 | ⛔ **GATE HELD** — Q9 of the M2 check was unanswered; re-quiz required before code | not started |
+| M4–M8 | not started | not started |
 
 **M0 checkpoint met.** Three containers healthy; API boots and connects to Postgres and Redis;
 readiness returns 503 with Redis stopped while liveness stays 200; readiness stays 200 with RabbitMQ

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -9,6 +10,7 @@ import { validate } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { EventsModule } from './modules/events/events.module';
+import { HoldsModule } from './modules/holds/holds.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
 import { RedisModule } from './redis/redis.module';
@@ -29,6 +31,11 @@ import { RedisModule } from './redis/redis.module';
       cache: true,
     }),
 
+    // Powers @Cron() in HoldsService's expired-hold sweeper (TR-DEC-007's backstop layer). Global
+    // registration, singular — a second forRoot() elsewhere would register every @Cron() handler
+    // twice, and the sweeper would then race itself.
+    ScheduleModule.forRoot(),
+
     DatabaseModule,
     RedisModule,
     HealthModule,
@@ -36,8 +43,8 @@ import { RedisModule } from './redis/redis.module';
     UsersModule,
     AuthModule,
     EventsModule,
+    HoldsModule,
 
-    // M3: HoldsModule
     // M5: OrdersModule, StripeModule
     // M6: MessagingModule, TicketsModule
     // M7: RealtimeModule

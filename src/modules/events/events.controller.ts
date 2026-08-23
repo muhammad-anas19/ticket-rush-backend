@@ -27,7 +27,7 @@ export class EventsController {
   })
   async findAll(@Query() query: FindEventsQueryDto) {
     const result = await this.events.findAll(query);
-    return { ...result, data: result.data.map(EventResponseDto.from) };
+    return { ...result, data: result.data.map((event) => EventResponseDto.from(event)) };
   }
 
   /**
@@ -45,12 +45,9 @@ export class EventsController {
     description: 'Includes past events, unlike the public listing.',
   })
   @ApiResponse({ status: 403, description: 'Caller is an attendee, not an organiser' })
-  async findMine(
-    @CurrentUser() user: CurrentUserPayload,
-    @Query() query: PaginationQueryDto,
-  ) {
+  async findMine(@CurrentUser() user: CurrentUserPayload, @Query() query: PaginationQueryDto) {
     const result = await this.events.findMine(user.id, query);
-    return { ...result, data: result.data.map(EventResponseDto.from) };
+    return { ...result, data: result.data.map((event) => EventResponseDto.from(event)) };
   }
 
   @Public()

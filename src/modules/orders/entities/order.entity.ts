@@ -77,7 +77,10 @@ export class Order {
    * orders. A second, independent line of defence behind `processed_events`: that table stops a
    * duplicate WEBHOOK, this constraint stops a duplicate SESSION.
    */
-  @Index('idx_orders_stripe_session_unique', { unique: true, where: 'stripe_session_id IS NOT NULL' })
+  @Index('idx_orders_stripe_session_unique', {
+    unique: true,
+    where: 'stripe_session_id IS NOT NULL',
+  })
   @Column({ type: 'varchar', length: 255, name: 'stripe_session_id', nullable: true })
   stripeSessionId: string | null;
 

@@ -2,10 +2,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nest
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import {
-  buildPaginatedResponse,
-  PaginationQueryDto,
-} from '../../common/dto/pagination-query.dto';
+import { buildPaginatedResponse, PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PaginatedResponse } from '../../common/types/api-envelope';
 import { CreateEventDto } from './dto/create-event.dto';
 import { FindEventsQueryDto } from './dto/find-events-query.dto';
@@ -173,7 +170,10 @@ export class EventsService {
   }
 
   /** Organiser's own events, including ones that have already started. */
-  async findMine(organiserId: string, query: PaginationQueryDto): Promise<PaginatedResponse<Event>> {
+  async findMine(
+    organiserId: string,
+    query: PaginationQueryDto,
+  ): Promise<PaginatedResponse<Event>> {
     // Uses idx_events_organiser_starts_at. Note that index exists BECAUSE of this query — the composite
     // on (starts_at) alone is useless here, since organiser_id is not its leftmost column and you can
     // only skip index columns from the right.

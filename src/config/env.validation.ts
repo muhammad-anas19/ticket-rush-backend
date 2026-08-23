@@ -138,6 +138,32 @@ export class EnvironmentVariables {
   @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
   @MinLength(1)
   CORS_ORIGIN: string;
+
+  // ── Stripe (M5) ─────────────────────────────────────────────────────────────
+  // Test mode only, enforced HERE rather than trusted by convention. Stripe's OWN prefix
+  // tells you which mode a key belongs to (`sk_test_…` vs `sk_live_…`), so this is a shape
+  // check, not a policy this app invents — a live key literally cannot pass validation and
+  // reach this codebase, which is a stronger guarantee than a code comment saying "don't".
+  @Matches(/^sk_test_/, {
+    message: 'STRIPE_SECRET_KEY must be a TEST key (sk_test_…) — live keys are never used here',
+  })
+  STRIPE_SECRET_KEY: string;
+
+  // Signs webhook payloads so `stripe.webhooks.constructEvent` can verify a request genuinely
+  // came from Stripe. Per-endpoint in the Stripe dashboard (or printed by `stripe listen` in
+  // development) — NOT the same secret as STRIPE_SECRET_KEY, and not reused across endpoints.
+  @Matches(/^whsec_/, { message: 'STRIPE_WEBHOOK_SECRET must start with whsec_' })
+  STRIPE_WEBHOOK_SECRET: string;
+
+  // Where Stripe Checkout redirects the BROWSER after payment — the frontend, not this API.
+  // Never trusted as proof of payment (`frontend/CLAUDE.md`: "the Stripe success page cannot
+  // be trusted") — only the webhook decides that. This URL exists purely to land the user
+  // somewhere that then asks the API for the real status.
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  STRIPE_SUCCESS_URL: string;
+
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  STRIPE_CANCEL_URL: string;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

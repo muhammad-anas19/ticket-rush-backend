@@ -11,8 +11,10 @@ import { validate } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { EventsModule } from './modules/events/events.module';
-import { HoldsModule } from './modules/holds/holds.module';
 import { HealthModule } from './modules/health/health.module';
+import { HoldsModule } from './modules/holds/holds.module';
+import { OrdersModule } from './modules/orders/orders.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 import { UsersModule } from './modules/users/users.module';
 import { RedisModule } from './redis/redis.module';
 
@@ -46,8 +48,9 @@ import { RedisModule } from './redis/redis.module';
     AuthModule,
     EventsModule,
     HoldsModule,
+    OrdersModule,
+    PaymentsModule,
 
-    // M5: OrdersModule, StripeModule
     // M6: MessagingModule, TicketsModule
     // M7: RealtimeModule
   ],

@@ -34,6 +34,12 @@ export interface AppConfig {
     refreshGraceSeconds: number;
     bcryptCost: number;
   };
+  stripe: {
+    secretKey: string;
+    webhookSecret: string;
+    successUrl: string;
+    cancelUrl: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -61,5 +67,11 @@ export default (): AppConfig => ({
     refreshExpiresDays: parseInt(process.env.JWT_REFRESH_EXPIRES_DAYS ?? '7', 10),
     refreshGraceSeconds: parseInt(process.env.REFRESH_GRACE_SECONDS ?? '30', 10),
     bcryptCost: parseInt(process.env.BCRYPT_COST ?? '12', 10),
+  },
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY!,
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
+    successUrl: process.env.STRIPE_SUCCESS_URL!,
+    cancelUrl: process.env.STRIPE_CANCEL_URL!,
   },
 });

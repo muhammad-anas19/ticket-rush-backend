@@ -33,7 +33,8 @@ sessions**. Stated up front so being at session 20 doesn't read as falling behin
 | M2 | ✅ Graded — [qa/phase-2-events-understanding-check.md](qa/phase-2-events-understanding-check.md) | ✅ Complete & verified — [walkthroughs/m2-events-code-walkthrough.md](walkthroughs/m2-events-code-walkthrough.md) |
 | M3 | ✅ Re-quizzed and passed — see [walkthroughs/m3-holds-code-walkthrough.md](walkthroughs/m3-holds-code-walkthrough.md) §0 | ✅ Complete & verified — [walkthroughs/m3-holds-code-walkthrough.md](walkthroughs/m3-holds-code-walkthrough.md) (decisions + the tuple bug) · [walkthroughs/m3-holds-end-to-end-flow.md](walkthroughs/m3-holds-end-to-end-flow.md) (request-by-request trace) |
 | M4 | ✅ Explained in detail with analogies — [concepts/04-redis.md](concepts/04-redis.md) | ✅ Backend complete & verified — [walkthroughs/m4-redis-code-walkthrough.md](walkthroughs/m4-redis-code-walkthrough.md) · frontend slice next |
-| M5–M8 | not started | not started |
+| M5 | ✅ Explained from zero — [concepts/05-stripe-payments-and-webhooks.md](concepts/05-stripe-payments-and-webhooks.md) | ✅ Backend complete & verified — [walkthroughs/m5-stripe-code-walkthrough.md](walkthroughs/m5-stripe-code-walkthrough.md) · frontend slice next |
+| M6–M8 | not started | not started |
 
 **M0 checkpoint met.** Three containers healthy; API boots and connects to Postgres and Redis;
 readiness returns 503 with Redis stopped while liveness stays 200; readiness stays 200 with RabbitMQ
@@ -201,9 +202,26 @@ guard, log line kept; a tampered signature header confirmed returning 400.
 
 **Checkpoint.** A resent event is a no-op, with the log line to prove it.
 
-**Docs.** `concepts/05-stripe-payments-and-webhooks.md` — why webhooks rather than the client success
-callback; signature verification and the attack without it; idempotency; out-of-order events; PCI
-scope and why card data must never reach this server.
+**Checkpoint met — plus a real duplicate bug caught by the test that proves it.**
+`payments.fulfilment.spec.ts` (real Postgres, no mocks): converts a hold + marks an order paid on
+the common path; re-commits inventory and marks an order paid when the hold expired but a seat is
+still free (`TR-DEC-011`); refunds when the hold expired **and** the event sold out in the meantime;
+and proves a redelivered event is a genuine no-op — `tickets_committed` unchanged, exactly one
+`processed_events` row. That last test caught the dedupe check itself being wrong the first time it
+was written (`TR-DEC-027`) — a duplicate webhook was silently reprocessed until the test's inventory
+assertion failed. Signature verification confirmed live against the running dev server: a
+`stripe-signature` header with the correct HMAC for the configured `STRIPE_WEBHOOK_SECRET` is
+accepted, a tampered one returns 400 with the raw body correctly available at `request.rawBody`.
+`stripe listen`/a real test-mode payment/`stripe events resend` — the three experiments needing an
+actual Stripe account — are the user's to run per
+[guides/stripe-test-setup.md](guides/stripe-test-setup.md).
+
+**Docs.** [concepts/05-stripe-payments-and-webhooks.md](concepts/05-stripe-payments-and-webhooks.md)
+— why webhooks rather than the client success callback; signature verification and the attack
+without it; idempotency; out-of-order events; PCI scope and why card data must never reach this
+server. [walkthroughs/m5-stripe-code-walkthrough.md](walkthroughs/m5-stripe-code-walkthrough.md) —
+code-level trace, including the `identifiers`-vs-`raw` bug. [guides/stripe-test-setup.md](guides/stripe-test-setup.md)
+— creating a test-mode Stripe account, API keys, the CLI, and running the three experiments.
 
 ---
 

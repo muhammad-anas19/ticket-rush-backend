@@ -79,8 +79,9 @@ Recorded so they aren't re-taught. Full detail is in `../../CLAUDE.md` §6.
       "something is wrong."
 - [ ] **Config validation at bootstrap, before the port binds** — and exit non-zero so a rolling
       deploy halts. *(M0 Q5)*
-- [ ] **Validate shape, not just presence** — a live payment key in dev is worse than a missing one.
-      *(M0 Q5)*
+- [x] *(practiced)* **Validate shape, not just presence** — a live payment key in dev is worse than
+      a missing one. *(M0 Q5)* Implemented in M5: `STRIPE_SECRET_KEY` is regex-validated against
+      `/^sk_test_/` at boot — a live key cannot pass validation and reach this codebase at all.
 - [ ] **`.env` vs `.env.example` vs platform secret injection**; rotate-first when a secret leaks.
       *(M0 Q5, Q177)*
 - [ ] **Connection pool exhaustion vs server refusal** — a client-side *wait* with a healthy-looking
@@ -102,11 +103,15 @@ Recorded so they aren't re-taught. Full detail is in `../../CLAUDE.md` §6.
       choice a decision rather than a default. *(M0 Q4, Q147)*
 - [ ] **Redis is a data-structure server, not "the caching thing"** — three distinct jobs in this
       project, only one of which is caching. *(M0 Q4)*
-- [ ] **The Stripe webhook can't use the normal request pipeline** — raw body for signature
-      verification, breaking at *body parsing*, before the `ValidationPipe` ever runs. *(M0 Q8)*
-      ⚠️ **Answered incorrectly** (guessed login). The highest-value item in this round.
-- [ ] **Global prefix vs external callback URLs** — `/api/webhooks/stripe`, not `/webhooks/stripe`.
-      Same class of bug as P1's cookie-`Path` incident. *(M0 Q8)*
+- [x] *(practiced)* **The Stripe webhook can't use the normal request pipeline** — raw body for
+      signature verification, breaking at *body parsing*, before the `ValidationPipe` ever runs.
+      *(M0 Q8, answered incorrectly at the time — guessed login)* Resolved and shipped in M5: see
+      `../concepts/05-stripe-payments-and-webhooks.md` §3 and
+      `../walkthroughs/m5-stripe-code-walkthrough.md` §4 for the working `rawBody: true` mechanism,
+      confirmed live against the running server with both a tampered and a validly-signed payload.
+- [x] *(practiced)* **Global prefix vs external callback URLs** — `/api/webhooks/stripe`, not
+      `/webhooks/stripe`. Same class of bug as P1's cookie-`Path` incident. *(M0 Q8)* The real route
+      is registered under the global `/api` prefix in M5, exactly as planned.
 
 ### PostgreSQL DDL
 

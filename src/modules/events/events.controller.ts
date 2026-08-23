@@ -26,8 +26,9 @@ export class EventsController {
       'allow-list because ORDER BY cannot be parameterised.',
   })
   async findAll(@Query() query: FindEventsQueryDto) {
-    const result = await this.events.findAll(query);
-    return { ...result, data: result.data.map((event) => EventResponseDto.from(event)) };
+    // Already DTO-shaped by the service — findAll is cache-aside from M4 onward, and what's
+    // cached is a plain projection, not an `Event` entity, so there is nothing left to map here.
+    return this.events.findAll(query);
   }
 
   /**
@@ -58,7 +59,8 @@ export class EventsController {
   // a non-UUID for a uuid column and raises a driver error that surfaces as a 500 — an input problem
   // reported as a server fault.
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return EventResponseDto.from(await this.events.findOne(id));
+    // Same reasoning as findAll — the service returns an EventResponseDto directly.
+    return this.events.findOne(id);
   }
 
   @Post()

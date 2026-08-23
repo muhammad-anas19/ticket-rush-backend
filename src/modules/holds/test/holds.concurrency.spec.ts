@@ -1,3 +1,4 @@
+import Redis from 'ioredis';
 import { DataSource } from 'typeorm';
 
 import { buildDataSourceOptions } from '../../../database/data-source';
@@ -18,6 +19,7 @@ import { HoldsService } from '../holds.service';
  */
 describe('Holds concurrency — the oversell experiment', () => {
   let dataSource: DataSource;
+  let redis: Redis;
   let holds: HoldsService;
   let organiserId: string;
 
@@ -28,7 +30,15 @@ describe('Holds concurrency — the oversell experiment', () => {
   beforeAll(async () => {
     dataSource = new DataSource(buildDataSourceOptions());
     await dataSource.initialize();
-    holds = new HoldsService(dataSource);
+    // A real connection, not a mock — HoldsService's post-commit countdown-key write is fire-
+    // and-forget against Redis (TR-DEC-007: authoritative for nothing), but it still has to
+    // succeed against something, and the whole point of this suite is exercising real
+    // infrastructure rather than a substitute for it.
+    redis = new Redis({
+      host: process.env.REDIS_HOST ?? 'localhost',
+      port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+    });
+    holds = new HoldsService(dataSource, redis);
 
     // Deterministic organiser, reused across runs rather than created fresh each time — a unique
     // constraint violation on re-running the suite would be a false failure unrelated to concurrency.
@@ -50,6 +60,7 @@ describe('Holds concurrency — the oversell experiment', () => {
 
   afterAll(async () => {
     await dataSource.destroy();
+    await redis.quit();
   });
 
   /** Fresh event before EACH test, so the naive test's oversell can never contaminate the atomic one. */

@@ -42,6 +42,33 @@ services:
       timeout: 3s
       retries: 10
 
+  # A GUI purely for LOOKING at what's in Redis during M4 — browse keys, inspect a hold's TTL
+  # counting down in real time, watch `cache:event:*` keys appear and vanish on invalidation.
+  # Not something the app depends on; RabbitMQ already ships an equivalent (the `-management`
+  # image variant below) but no comparable all-in-one Redis image exists, so this is a second
+  # container rather than a second command flag.
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: ticketrush-redisinsight
+    restart: unless-stopped
+    ports:
+      - '5540:5540' # web UI — http://localhost:5540
+    volumes:
+      # Persists saved connections/settings only. Nothing here is Redis DATA — that stays in
+      # `redis_data` above — so wiping this volume loses zero application state.
+      - redisinsight_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    # No healthcheck. Confirmed the app itself binds `0.0.0.0:5540` (via `netstat` inside the
+    # container) and answers `/api/health` correctly both from the host and from the container's
+    # own bridge IP — but a probe run from INSIDE the container against `127.0.0.1:5540`
+    # (the only address a static Compose healthcheck can target) gets refused regardless of how
+    # long it waits. Whatever the image does internally to reject its own loopback, a healthcheck
+    # here would report "unhealthy" forever on a container that works fine — worse than no check
+    # at all. Nothing else in this stack depends on this one being healthy to start, so there is
+    # nothing this would have protected.
+
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     container_name: ticketrush-rabbitmq
@@ -65,4 +92,5 @@ services:
 
 volumes:
   redis_data:
+  redisinsight_data:
   rabbitmq_data:

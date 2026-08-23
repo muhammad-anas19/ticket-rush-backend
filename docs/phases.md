@@ -32,7 +32,8 @@ sessions**. Stated up front so being at session 20 doesn't read as falling behin
 | M1 | ✅ Graded — [qa/phase-1-auth-understanding-check.md](qa/phase-1-auth-understanding-check.md) | ✅ Backend complete & verified — [walkthroughs/m1-auth-code-walkthrough.md](walkthroughs/m1-auth-code-walkthrough.md) · frontend (NextAuth) next |
 | M2 | ✅ Graded — [qa/phase-2-events-understanding-check.md](qa/phase-2-events-understanding-check.md) | ✅ Complete & verified — [walkthroughs/m2-events-code-walkthrough.md](walkthroughs/m2-events-code-walkthrough.md) |
 | M3 | ✅ Re-quizzed and passed — see [walkthroughs/m3-holds-code-walkthrough.md](walkthroughs/m3-holds-code-walkthrough.md) §0 | ✅ Complete & verified — [walkthroughs/m3-holds-code-walkthrough.md](walkthroughs/m3-holds-code-walkthrough.md) (decisions + the tuple bug) · [walkthroughs/m3-holds-end-to-end-flow.md](walkthroughs/m3-holds-end-to-end-flow.md) (request-by-request trace) |
-| M4–M8 | not started | not started |
+| M4 | ✅ Explained in detail with analogies — [concepts/04-redis.md](concepts/04-redis.md) | ✅ Backend complete & verified — [walkthroughs/m4-redis-code-walkthrough.md](walkthroughs/m4-redis-code-walkthrough.md) · frontend slice next |
+| M5–M8 | not started | not started |
 
 **M0 checkpoint met.** Three containers healthy; API boots and connects to Postgres and Redis;
 readiness returns 503 with Redis stopped while liveness stays 200; readiness stays 200 with RabbitMQ
@@ -165,10 +166,20 @@ correctness problem" is worth more than the cache itself.
 
 **Checkpoint.** A measured hit ratio you can quote, and a demonstrated stampede on a cold key.
 
-**Docs.** `concepts/04-redis.md` — single-threaded event loop and why that's fine; data structures
-beyond strings; lazy vs active expiry; eviction policies; RDB vs AOF; atomicity via Lua and `SETNX`;
-distributed locks and the Redlock argument; cache-aside vs read-through vs write-through vs
-write-behind.
+**Checkpoint met.** `events.cache.spec.ts`: 25 concurrent requests against a cold `GET
+/api/events/:id` key trigger exactly 1 database fetch (single-flight lock); a live test proves
+`ticketsRemaining` reflects a write made entirely outside the cache's knowledge, even while the rest
+of the cached row is still warm; `GET /api/cache/stats` on the running dev server moved from
+`{hits:6, misses:59}` to `{hits:7, misses:59}` across two identical list requests. Lint and typecheck
+clean; the M3 concurrency suite re-verified passing with the Redis client now threaded through
+`HoldsService`.
+
+**Docs.** `concepts/04-redis.md` — single-threaded event loop and why that's fine; cache-aside read
+and write paths; TTL tradeoffs; stampede and single-flight refill; the cache-vs-truth line;
+`concepts/00-docker-and-service-topology.md`-adjacent data-structure uses beyond caching (TTL keys,
+Pub/Sub). [walkthroughs/m4-redis-code-walkthrough.md](walkthroughs/m4-redis-code-walkthrough.md) —
+code-level trace, including the fork where caching the whole `EventResponseDto` would have violated
+the deliberate exclusion above.
 
 ---
 

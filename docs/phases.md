@@ -200,7 +200,10 @@ Test mode only. Live keys never touched.
 
 **Deliverables.** `POST /api/holds/:id/checkout` — verifies the hold is `active`, unexpired, and owned
 by the caller; creates the order as `pending`; creates a Checkout Session with
-`metadata: { holdId, orderId }`. `POST /api/webhooks/stripe` — **raw body** preserved for signature
+`metadata: { holdId, orderId }`. `GET /api/orders/mine` — added once the frontend `/me/tickets`
+slice needed it; a LEFT JOIN for the event summary, same N+1 discipline as `EventsService.findAll()`,
+and the same "declare before `:id`" route-ordering rule `events/mine` already established.
+`POST /api/webhooks/stripe` — **raw body** preserved for signature
 verification, exempt from the global `ValidationPipe`, registered at the real prefixed path.
 Signature verified with `stripe.webhooks.constructEvent`, 400 on failure. Dedupe insert and
 fulfilment in **one transaction** (`TR-DEC-008`). Resolve `TR-DEC-011` — payment arriving after the

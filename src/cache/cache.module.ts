@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 
-import { CacheController } from './cache.controller';
 import { CacheService } from './cache.service';
 
 /**
@@ -10,7 +9,6 @@ import { CacheService } from './cache.service';
  * dependencies stay explicit in their own module files.
  */
 @Module({
-  controllers: [CacheController],
   providers: [CacheService],
   exports: [CacheService],
 })

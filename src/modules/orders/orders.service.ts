@@ -10,6 +10,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 
+import { buildPaginatedResponse, PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { PaginatedResponse } from '../../common/types/api-envelope';
 import { AppConfig } from '../../config/configuration';
 import { STRIPE_CLIENT } from '../../stripe/stripe.module';
 import { Event } from '../events/entities/event.entity';
@@ -143,5 +145,36 @@ export class OrdersService {
     }
 
     return order;
+  }
+
+  /**
+   * The caller's own order history, across every event, newest first — `/me/tickets`'s data
+   * source. A JOIN for the event summary (title/venue/starts), not a query per row: the exact
+   * N+1 `EventsService.findAll()` already avoids for its own organiser column, applied here to
+   * the same class of problem.
+   */
+  async findMine(userId: string, query: PaginationQueryDto): Promise<PaginatedResponse<Order>> {
+    const qb = this.orders.createQueryBuilder('order');
+
+    qb.leftJoin('order.event', 'event').addSelect([
+      'event.id',
+      'event.title',
+      'event.venue',
+      'event.startsAt',
+    ]);
+
+    qb.where('order.userId = :userId', { userId });
+
+    qb.orderBy('order.createdAt', 'DESC');
+    // Stable tiebreaker — same reasoning as every other paginated list in this project: without
+    // it, rows sharing a `createdAt` value (two orders placed in the same millisecond) can shift
+    // between pages across requests.
+    qb.addOrderBy('order.id', 'ASC');
+
+    qb.skip(query.skip).take(query.limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return buildPaginatedResponse(data, total, query);
   }
 }

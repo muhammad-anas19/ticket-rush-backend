@@ -1,7 +1,17 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CheckoutSessionResponseDto } from './dto/checkout-session-response.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { OrdersService } from './orders.service';
@@ -30,6 +40,22 @@ export class OrdersController {
     @CurrentUser() user: CurrentUserPayload,
   ): Promise<CheckoutSessionResponseDto> {
     return this.orders.createCheckoutSession(holdId, user.id);
+  }
+
+  /**
+   * Declared BEFORE `:id`, and the order matters — same trap `EventsController` already names:
+   * Nest matches routes in declaration order, so `:id` first would swallow `/orders/mine` with
+   * `id = 'mine'`, and `ParseUUIDPipe` on the OTHER route would reject it as malformed — a 400 on
+   * a route that exists.
+   */
+  @Get('orders/mine')
+  @ApiOperation({
+    summary: 'My order history (across every event), newest first',
+    description: "`/me/tickets`'s data source — every order the caller has ever placed.",
+  })
+  async findMine(@CurrentUser() user: CurrentUserPayload, @Query() query: PaginationQueryDto) {
+    const result = await this.orders.findMine(user.id, query);
+    return { ...result, data: result.data.map((order) => OrderResponseDto.from(order)) };
   }
 
   @Get('orders/:id')

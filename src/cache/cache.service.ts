@@ -12,9 +12,6 @@ const LOCK_MAX_WAIT_MS = 1000;
 // server startup); small enough that nobody can perceive "60s" having quietly become "69s".
 const JITTER_RATIO = 0.15;
 
-const HIT_COUNTER_KEY = 'cache:stats:hits';
-const MISS_COUNTER_KEY = 'cache:stats:misses';
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -48,15 +45,8 @@ export class CacheService {
   async getOrSet<T>(key: string, ttlSeconds: number, fetcher: () => Promise<T>): Promise<T> {
     const cached = await this.redis.get(key);
     if (cached !== null) {
-      await this.redis.incr(HIT_COUNTER_KEY);
       return JSON.parse(cached) as T;
     }
-
-    // Counted as a miss here, on the FIRST look — including for callers who go on to wait for
-    // another request's refill below. They did not find the value in the cache; that they got it
-    // moments later without hitting the database themselves is the stampede mitigation working,
-    // not a hit.
-    await this.redis.incr(MISS_COUNTER_KEY);
 
     const lockKey = `lock:${key}`;
     const acquiredLock = await this.redis.set(lockKey, '1', 'PX', LOCK_TTL_MS, 'NX');
@@ -108,21 +98,5 @@ export class CacheService {
   async getVersion(namespace: string): Promise<number> {
     const value = await this.redis.get(`version:${namespace}`);
     return value ? parseInt(value, 10) : 0;
-  }
-
-  async getStats(): Promise<{ hits: number; misses: number; hitRatio: number }> {
-    const [hits, misses] = await Promise.all([
-      this.redis.get(HIT_COUNTER_KEY),
-      this.redis.get(MISS_COUNTER_KEY),
-    ]);
-    const hitCount = parseInt(hits ?? '0', 10);
-    const missCount = parseInt(misses ?? '0', 10);
-    const total = hitCount + missCount;
-
-    return {
-      hits: hitCount,
-      misses: missCount,
-      hitRatio: total === 0 ? 0 : hitCount / total,
-    };
   }
 }

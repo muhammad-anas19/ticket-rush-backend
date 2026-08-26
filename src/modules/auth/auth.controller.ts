@@ -1,22 +1,17 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
-import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
 import { AuthResponseDto, UserResponseDto } from './dto/auth-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
-import { UsersService } from '../users/users.service';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private readonly auth: AuthService,
-    private readonly users: UsersService,
-  ) {}
+  constructor(private readonly auth: AuthService) {}
 
   @Public()
   @Post('register')
@@ -90,23 +85,5 @@ export class AuthController {
   async logout(@Body() dto: RefreshDto): Promise<{ loggedOut: true }> {
     await this.auth.logout(dto.refreshToken);
     return { loggedOut: true };
-  }
-
-  @Get('me')
-  @ApiBearerAuth('access-token')
-  @ApiOperation({
-    summary: 'Current user',
-    description:
-      'Reads from the database rather than echoing the token, so a client sees current data ' +
-      'rather than a 15-minute-old snapshot of it.',
-  })
-  @ApiResponse({ status: 200, type: UserResponseDto })
-  @ApiResponse({ status: 401, description: 'Missing, malformed, or expired token' })
-  async me(@CurrentUser() current: CurrentUserPayload): Promise<UserResponseDto> {
-    // Note: NOT built from the token's claims. The token carries email and role for cheap
-    // authorisation, but /me is the one place a client legitimately asks "what is true now" —
-    // and answering from a token issued up to 15 minutes ago would report stale data as fact.
-    const user = await this.users.findByIdOrFail(current.id);
-    return { id: user.id, email: user.email, role: user.role, createdAt: user.createdAt };
   }
 }

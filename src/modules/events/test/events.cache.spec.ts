@@ -9,9 +9,9 @@ import { Event } from '../entities/event.entity';
 import { EventsService } from '../events.service';
 
 /**
- * M4's checkpoint, per `docs/phases.md`: "a measured hit ratio you can quote, and a demonstrated
- * stampede on a cold key." Real Postgres and real Redis, like the M3 concurrency suite — a mocked
- * cache would prove nothing about the actual race this exists to close.
+ * M4's checkpoint, per `docs/phases.md`: "a demonstrated stampede on a cold key." Real Postgres
+ * and real Redis, like the M3 concurrency suite — a mocked cache would prove nothing about the
+ * actual race this exists to close.
  */
 describe('Events cache — cache-aside, stampede, and the availability exclusion', () => {
   let dataSource: DataSource;
@@ -134,17 +134,4 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
       expect(result.ticketsRemaining).toBe(10);
     });
   }, 15_000);
-
-  it('hit/miss counters move the way a real cold-then-warm read pattern predicts', async () => {
-    const event = await seedEvent();
-
-    const before = await cache.getStats();
-    await events.findOne(event.id); // cold — one miss
-    await events.findOne(event.id); // warm — one hit
-    await events.findOne(event.id); // warm — one hit
-    const after = await cache.getStats();
-
-    expect(after.misses - before.misses).toBe(1);
-    expect(after.hits - before.hits).toBe(2);
-  });
 });

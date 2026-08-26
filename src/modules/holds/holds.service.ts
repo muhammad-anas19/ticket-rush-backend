@@ -11,6 +11,7 @@ import Redis from 'ioredis';
 import { DataSource } from 'typeorm';
 
 import { REDIS_CLIENT } from '../../redis/redis.module';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { Event } from '../events/entities/event.entity';
 import { HoldStatus, TicketHold } from './entities/ticket-hold.entity';
 
@@ -65,11 +66,28 @@ export class HoldsService {
     // decides the outcome has already committed. Injected by token, same reasoning as
     // `RedisModule` itself: there is exactly one shared connection, not a pool.
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    // M7: broadcasts the new remaining count after inventory actually changes. Same "after
+    // commit, never inside the transaction" placement as the Redis countdown key above — a
+    // WebSocket emit is exactly the kind of external call `create()`'s own doc comment warns
+    // must never sit inside a transaction holding a row lock.
+    private readonly realtime: RealtimeService,
   ) {}
 
   /** `hold:<id>` — mirrors `expires_at`, nothing reads it as truth. See TR-DEC-024. */
   private holdCountdownKey(holdId: string): string {
     return `hold:${holdId}`;
+  }
+
+  /** `ticketsRemaining`/`isSoldOut` computed the same way `Event`'s own getters do — kept here
+   * rather than loading a full `Event` entity, since every caller already has both raw numbers
+   * from the same `RETURNING` clause that just committed them. */
+  private broadcast(eventId: string, ticketsCommitted: number, totalTickets: number): void {
+    const ticketsRemaining = totalTickets - ticketsCommitted;
+    this.realtime.broadcastAvailability({
+      eventId,
+      ticketsRemaining,
+      isSoldOut: ticketsRemaining <= 0,
+    });
   }
 
   /**
@@ -114,12 +132,14 @@ export class HoldsService {
       // Destructured as a tuple — see QueryResultTuple above for why that is load-bearing rather than
       // stylistic. `manager.query()` on an UPDATE ... RETURNING returns [rows, affectedCount]; treating
       // it as a plain rows array is exactly the bug the concurrency test exists to catch, and did.
-      const [rows] = await manager.query<QueryResultTuple<{ tickets_committed: number }>>(
+      const [rows] = await manager.query<
+        QueryResultTuple<{ tickets_committed: number; total_tickets: number }>
+      >(
         `UPDATE events
             SET tickets_committed = tickets_committed + $1
           WHERE id = $2
             AND tickets_committed + $1 <= total_tickets
-        RETURNING tickets_committed`,
+        RETURNING tickets_committed, total_tickets`,
         [quantity, eventId],
       );
 
@@ -142,13 +162,13 @@ export class HoldsService {
       });
       await manager.save(hold);
 
-      const ticketsCommitted = rows[0].tickets_committed;
+      const { tickets_committed: ticketsCommitted, total_tickets: totalTickets } = rows[0];
       this.logger.log(
         `Hold ${hold.id} created: ${quantity} ticket(s) on event ${eventId} by user ${userId} ` +
           `(committed now ${ticketsCommitted})`,
       );
 
-      return { hold, ticketsCommitted };
+      return { hold, ticketsCommitted, totalTickets };
     });
 
     // AFTER commit, not inside the transaction: Redis can't participate in a Postgres rollback
@@ -160,6 +180,8 @@ export class HoldsService {
       'PX',
       HOLD_DURATION_MS,
     );
+
+    this.broadcast(eventId, result.ticketsCommitted, result.totalTickets);
 
     return result;
   }
@@ -223,7 +245,7 @@ export class HoldsService {
    * rather than adopting one rule project-wide.
    */
   async release(holdId: string, userId: string): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
+    const eventUpdate = await this.dataSource.transaction(async (manager) => {
       // Row lock taken here and held for the transaction, so a concurrent sweeper tick or a second
       // release call on the same hold blocks rather than racing to decrement the counter twice.
       const hold = await manager
@@ -245,15 +267,22 @@ export class HoldsService {
       hold.status = HoldStatus.Expired;
       await manager.save(hold);
 
-      await manager.query(
-        `UPDATE events SET tickets_committed = tickets_committed - $1 WHERE id = $2`,
+      const [rows] = await manager.query<
+        QueryResultTuple<{ tickets_committed: number; total_tickets: number }>
+      >(
+        `UPDATE events SET tickets_committed = tickets_committed - $1
+          WHERE id = $2
+        RETURNING tickets_committed, total_tickets`,
         [hold.quantity, hold.eventId],
       );
 
       this.logger.log(`Hold ${holdId} released early by user ${userId}`);
+
+      return { eventId: hold.eventId, ...rows[0] };
     });
 
     await this.redis.del(this.holdCountdownKey(holdId));
+    this.broadcast(eventUpdate.eventId, eventUpdate.tickets_committed, eventUpdate.total_tickets);
   }
 
   /**
@@ -288,7 +317,11 @@ export class HoldsService {
       // single long transaction would hold row locks across every event touched for the entire sweep
       // — including events with live, contended hold traffic — turning a maintenance task into a
       // stall on the hot path. Per-hold transactions are held for microseconds each.
-      const wasReleased = await this.dataSource.transaction(async (manager) => {
+      const claimResult = await this.dataSource.transaction<{
+        eventId: string;
+        ticketsCommitted: number;
+        totalTickets: number;
+      } | null>(async (manager) => {
         // The claim IS the concurrency control: `WHERE status = 'active'` inside the same statement
         // that changes it means exactly one process can ever win this row, by the same atomic-UPDATE
         // mechanism `create()` uses for inventory. Two sweeper ticks overlapping, or a user releasing
@@ -309,18 +342,26 @@ export class HoldsService {
         );
 
         if (claimed.length === 0) {
-          return false;
+          return null;
         }
 
-        await manager.query(
-          `UPDATE events SET tickets_committed = tickets_committed - $1 WHERE id = $2`,
+        const [eventRows] = await manager.query<
+          QueryResultTuple<{ tickets_committed: number; total_tickets: number }>
+        >(
+          `UPDATE events SET tickets_committed = tickets_committed - $1
+            WHERE id = $2
+          RETURNING tickets_committed, total_tickets`,
           [claimed[0].quantity, claimed[0].event_id],
         );
 
-        return true;
+        return {
+          eventId: claimed[0].event_id,
+          ticketsCommitted: eventRows[0].tickets_committed,
+          totalTickets: eventRows[0].total_tickets,
+        };
       });
 
-      if (wasReleased) {
+      if (claimResult) {
         released += 1;
         // Usually a no-op: this key's own TTL was set to expire at roughly the same wall-clock
         // moment. Explicit anyway, because a hold's `expires_at` CAN be moved independently of
@@ -328,6 +369,7 @@ export class HoldsService {
         // real minutes is exactly that), and a dangling key that outlives the hold it describes
         // is a small but pointless lie for whatever eventually reads it.
         await this.redis.del(this.holdCountdownKey(id));
+        this.broadcast(claimResult.eventId, claimResult.ticketsCommitted, claimResult.totalTickets);
       }
     }
 

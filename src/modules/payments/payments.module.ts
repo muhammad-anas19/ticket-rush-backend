@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { RealtimeModule } from '../../realtime/realtime.module';
 import { StripeModule } from '../../stripe/stripe.module';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
@@ -12,7 +13,7 @@ import { PaymentsService } from './payments.service';
  * repository bound to the default connection would be a standing invitation to escape it.
  */
 @Module({
-  imports: [StripeModule],
+  imports: [StripeModule, RealtimeModule],
   controllers: [PaymentsController],
   providers: [PaymentsService],
 })

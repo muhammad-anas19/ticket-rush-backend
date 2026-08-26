@@ -2,16 +2,23 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import { DataSource } from 'typeorm';
 
+import { RealtimeService } from '../../realtime/realtime.service';
 import { STRIPE_CLIENT } from '../../stripe/stripe.module';
 import { HoldStatus, TicketHold } from '../holds/entities/ticket-hold.entity';
 import { Order, OrderStatus } from '../orders/entities/order.entity';
 import { ProcessedEvent } from './entities/processed-event.entity';
 
+interface AvailabilityChange {
+  eventId: string;
+  ticketsCommitted: number;
+  totalTickets: number;
+}
+
 type FulfilmentOutcome =
   | { kind: 'duplicate' }
   | { kind: 'unknown-order' }
   | { kind: 'converted' }
-  | { kind: 'recommitted' }
+  | { kind: 'recommitted'; availability: AvailabilityChange }
   | { kind: 'refund-needed'; order: Order };
 
 @Injectable()
@@ -21,6 +28,10 @@ export class PaymentsService {
   constructor(
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
     private readonly dataSource: DataSource,
+    // M7: only the TR-DEC-011 re-commit path changes `tickets_committed` — the common
+    // "converted" path doesn't move the number at all (M3 already counted it), so only that one
+    // branch has anything worth broadcasting.
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -49,6 +60,19 @@ export class PaymentsService {
 
     if (outcome.kind === 'refund-needed') {
       await this.issueRefund(event.data.object, outcome.order);
+    }
+
+    if (outcome.kind === 'recommitted') {
+      // Broadcast AFTER the transaction committed, same placement as HoldsService's own
+      // post-commit broadcasts — a WebSocket emit is an external call, never something that
+      // belongs inside a transaction holding a row lock.
+      const { eventId, ticketsCommitted, totalTickets } = outcome.availability;
+      const ticketsRemaining = totalTickets - ticketsCommitted;
+      this.realtime.broadcastAvailability({
+        eventId,
+        ticketsRemaining,
+        isSoldOut: ticketsRemaining <= 0,
+      });
     }
   }
 
@@ -134,12 +158,14 @@ export class PaymentsService {
       // if the seat is still free, take it; if someone else has it now, there is nothing left
       // to sell, and the payment must be refunded rather than kept for a seat that no longer
       // exists.
-      const [rows] = await manager.query<[Array<{ tickets_committed: number }>, number]>(
+      const [rows] = await manager.query<
+        [Array<{ tickets_committed: number; total_tickets: number }>, number]
+      >(
         `UPDATE events
             SET tickets_committed = tickets_committed + $1
           WHERE id = $2
             AND tickets_committed + $1 <= total_tickets
-        RETURNING tickets_committed`,
+        RETURNING tickets_committed, total_tickets`,
         [order.quantity, order.eventId],
       );
 
@@ -150,7 +176,14 @@ export class PaymentsService {
           `Order ${order.id} paid after its hold had already expired — re-committed ` +
             `${order.quantity} ticket(s) on re-check (TR-DEC-011)`,
         );
-        return { kind: 'recommitted' };
+        return {
+          kind: 'recommitted',
+          availability: {
+            eventId: order.eventId,
+            ticketsCommitted: rows[0].tickets_committed,
+            totalTickets: rows[0].total_tickets,
+          },
+        };
       }
 
       order.status = OrderStatus.Refunded;

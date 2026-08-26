@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 
 import { CacheService } from '../../../cache/cache.service';
 import { buildDataSourceOptions } from '../../../database/data-source';
+import { RealtimeService } from '../../../realtime/realtime.service';
 import { User, UserRole } from '../../users/entities/user.entity';
 import { Event } from '../entities/event.entity';
 import { EventsService } from '../events.service';
@@ -28,7 +29,10 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
       port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
     });
     cache = new CacheService(redis);
-    events = new EventsService(dataSource.getRepository(Event), cache);
+    // No `.setServer()` — this suite proves cache-aside behaviour, not the M7 broadcast, so
+    // `broadcastAvailability()` (only reachable via `update()`, which none of these tests call
+    // with a `totalTickets` change) simply no-ops here.
+    events = new EventsService(dataSource.getRepository(Event), cache, new RealtimeService());
 
     const users = dataSource.getRepository(User);
     let organiser = await users.findOne({ where: { email: 'cache-test-organiser@example.com' } });

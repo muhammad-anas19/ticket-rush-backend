@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 
 import { buildDataSourceOptions } from '../../../database/data-source';
+import { RealtimeService } from '../../../realtime/realtime.service';
 import { Event } from '../../events/entities/event.entity';
 import { HoldStatus, TicketHold } from '../../holds/entities/ticket-hold.entity';
 import { Order, OrderStatus } from '../../orders/entities/order.entity';
@@ -30,6 +31,12 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
     return { refunds: { create: refundsCreate } } as unknown as ConstructorParameters<
       typeof PaymentsService
     >[0];
+  }
+
+  // No `.setServer()` — this suite proves fulfilment/dedupe, not the M7 broadcast, so
+  // `broadcastAvailability()` simply no-ops (with a logged warning) on every call here.
+  function makePayments(refundsCreate?: jest.Mock): PaymentsService {
+    return new PaymentsService(fakeStripe(refundsCreate), dataSource, new RealtimeService());
   }
 
   beforeAll(async () => {
@@ -147,7 +154,7 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
       holdStatus: HoldStatus.Active,
       holdExpired: false,
     });
-    const payments = new PaymentsService(fakeStripe(), dataSource);
+    const payments = makePayments();
 
     await payments.handleEvent(
       checkoutCompletedEvent(`evt_converted_${hold.id}`, hold.id, order.id),
@@ -168,7 +175,7 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
       holdStatus: HoldStatus.Expired, // the sweeper already released THIS hold's own seat
       holdExpired: true,
     });
-    const payments = new PaymentsService(fakeStripe(), dataSource);
+    const payments = makePayments();
 
     await payments.handleEvent(
       checkoutCompletedEvent(`evt_recommit_${hold.id}`, hold.id, order.id),
@@ -190,7 +197,7 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
       holdExpired: true,
     });
     const refundsCreate = jest.fn().mockResolvedValue({ id: 're_test' });
-    const payments = new PaymentsService(fakeStripe(refundsCreate), dataSource);
+    const payments = makePayments(refundsCreate);
 
     await payments.handleEvent(
       checkoutCompletedEvent(`evt_refund_${hold.id}`, hold.id, order.id, 'pi_test_refund'),
@@ -210,7 +217,7 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
       holdStatus: HoldStatus.Active,
       holdExpired: false,
     });
-    const payments = new PaymentsService(fakeStripe(), dataSource);
+    const payments = makePayments();
     const stripeEventId = `evt_dupe_${hold.id}`;
 
     await payments.handleEvent(checkoutCompletedEvent(stripeEventId, hold.id, order.id));

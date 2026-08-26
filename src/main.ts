@@ -9,6 +9,7 @@ import { AppModule } from './app.module';
 import { AppConfig } from './config/configuration';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
+import { RedisIoAdapter } from './realtime/redis-io.adapter';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
@@ -100,6 +101,19 @@ async function bootstrap(): Promise<void> {
   // Lets onApplicationShutdown hooks run on SIGTERM — without it the Redis socket keeps the
   // event loop alive and the container is eventually SIGKILLed instead of exiting cleanly.
   app.enableShutdownHooks();
+
+  // M7: without this, Socket.IO defaults to per-instance, in-memory room membership — a
+  // broadcast issued on one instance would only reach sockets connected to THAT instance
+  // (`concepts/07-websockets-and-realtime.md` §4, the two-instance problem). Two dedicated
+  // ioredis connections (never the shared `REDIS_CLIENT`) give every instance a Pub/Sub channel
+  // to re-broadcast an emit locally — see `redis-io.adapter.ts` for why they can't be shared.
+  const redisIoAdapter = new RedisIoAdapter(
+    app,
+    config.get('redis.host', { infer: true }),
+    config.get('redis.port', { infer: true }),
+  );
+  await redisIoAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisIoAdapter);
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('TicketRush API')

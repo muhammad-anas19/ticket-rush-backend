@@ -10,10 +10,18 @@ M2  Events — schema, migrations, indexes, pagination, CRUD
 M3  ★ Holds & Concurrency — atomic conditional UPDATE, transaction discipline
 M4  ★ Redis — cache-aside, TTL, invalidation, stampede, what we refuse to cache
 M5  ★ Stripe — Checkout, raw body, signature, in-transaction dedupe
-M6  ★ RabbitMQ — topic exchange, manual ack, idempotent consumers, DLQ, TTL+DLX
-M7  ★ WebSockets — Socket.IO gateway, rooms, the two-instance failure, redis-adapter
+M6  ★ RabbitMQ — topic exchange, manual ack, idempotent consumers, DLQ, TTL+DLX     [PAUSED, TR-DEC-030]
+M7  ★ WebSockets — Socket.IO gateway, rooms, the two-instance failure, redis-adapter [BUILT NEXT]
 M8  Tests, CI, security review
 ```
+
+**Order note (`TR-DEC-030`, user-directed):** M6 is paused after M5, to be resumed later. M7 is built
+next, out of the original sequence. Every write path M7 broadcasts from is already synchronous
+application code (`HoldsService`, the M3 sweeper, `PaymentsService`) — nothing about it needs a
+queue in between. The one named consequence: hold-expiry broadcasts are only as timely as the M3
+sweeper's 30-second cadence until M6's RabbitMQ TTL+DLX trigger exists — correctness is unaffected,
+only latency (`TR-DEC-007` already treats the sweeper as a correct backstop, just not the *timely*
+layer).
 
 **Gate rule.** No module's code is written before its `qa/` understanding check is answered and
 graded. No exceptions — the gate is the point.
@@ -33,8 +41,10 @@ sessions**. Stated up front so being at session 20 doesn't read as falling behin
 | M2 | ✅ Graded — [qa/phase-2-events-understanding-check.md](qa/phase-2-events-understanding-check.md) | ✅ Complete & verified — [walkthroughs/m2-events-code-walkthrough.md](walkthroughs/m2-events-code-walkthrough.md) |
 | M3 | ✅ Re-quizzed and passed — see [walkthroughs/m3-holds-code-walkthrough.md](walkthroughs/m3-holds-code-walkthrough.md) §0 | ✅ Complete & verified — [walkthroughs/m3-holds-code-walkthrough.md](walkthroughs/m3-holds-code-walkthrough.md) (decisions + the tuple bug) · [walkthroughs/m3-holds-end-to-end-flow.md](walkthroughs/m3-holds-end-to-end-flow.md) (request-by-request trace) |
 | M4 | ✅ Explained in detail with analogies — [concepts/04-redis.md](concepts/04-redis.md) | ✅ Backend complete & verified — [walkthroughs/m4-redis-code-walkthrough.md](walkthroughs/m4-redis-code-walkthrough.md) · frontend slice next |
-| M5 | ✅ Explained from zero — [concepts/05-stripe-payments-and-webhooks.md](concepts/05-stripe-payments-and-webhooks.md) | ✅ Backend complete & verified — [walkthroughs/m5-stripe-code-walkthrough.md](walkthroughs/m5-stripe-code-walkthrough.md) · frontend slice next |
-| M6–M8 | not started | not started |
+| M5 | ✅ Explained from zero — [concepts/05-stripe-payments-and-webhooks.md](concepts/05-stripe-payments-and-webhooks.md) | ✅ Backend complete & verified — [walkthroughs/m5-stripe-code-walkthrough.md](walkthroughs/m5-stripe-code-walkthrough.md) · **frontend slice pending real Stripe env keys** |
+| M6 | — | ⏸️ **Paused** — deferred to later, `TR-DEC-030` |
+| M7 | ✅ Explained in detail — [concepts/07-websockets-and-realtime.md](concepts/07-websockets-and-realtime.md) | ✅ Backend complete & verified — [walkthroughs/m7-websockets-code-walkthrough.md](walkthroughs/m7-websockets-code-walkthrough.md) · built ahead of M6, `TR-DEC-030` · frontend slice next |
+| M8 | not started | not started |
 
 **M0 checkpoint met.** Three containers healthy; API boots and connects to Postgres and Redis;
 readiness returns 503 with Redis stopped while liveness stays 200; readiness stays 200 with RabbitMQ
@@ -227,6 +237,9 @@ code-level trace, including the `identifiers`-vs-`raw` bug. [guides/stripe-test-
 
 ## M6 ★ — RabbitMQ
 
+**⏸️ Paused after M5 — see `TR-DEC-030`.** Resumed later; everything below is unchanged and waiting,
+not abandoned.
+
 **Two flows.**
 
 *Fulfilment.* `order.paid` published to a topic exchange on payment confirmation. A consumer generates
@@ -254,6 +267,11 @@ why naive immediate requeue is dangerous; RabbitMQ vs Redis lists vs Redis Strea
 
 ## M7 ★ — WebSockets
 
+**Built ahead of M6 — see `TR-DEC-030`.** Broadcasts hook directly into the existing synchronous
+write paths (`HoldsService`, the M3 sweeper, `PaymentsService`) rather than a queue consumer.
+Hold-expiry broadcasts are bounded by the sweeper's 30s cadence until M6's TTL+DLX trigger exists —
+correctness unaffected, latency only.
+
 **Deliverables.** A Socket.IO gateway with a room per event, broadcasting the new remaining count to
 `event:{id}` on hold, purchase, and expiry. Connection authenticated **at the handshake**, not in a
 message. Resolve `TR-DEC-013` — token in the handshake versus a single-use Redis ticket.
@@ -265,9 +283,31 @@ update.** That's the instance-local broadcast problem, seen rather than read abo
 
 **Checkpoint.** Two instances stay in sync, and you can explain precisely what the adapter changed.
 
-**Docs.** `concepts/07-websockets-and-realtime.md` — the HTTP upgrade handshake; frames; ping/pong;
-WebSocket vs SSE vs polling; sticky sessions behind a load balancer; why presence is harder than it
-looks across instances; what limits connections per Node process.
+**Checkpoint met.** Two real instances (ports 3001/3002, same Postgres/Redis) — a hold created
+through instance A was received by a client connected only to instance B, confirmed by payload
+(`ticketsRemaining` correct on both). Transcript in
+[walkthroughs/m7-websockets-code-walkthrough.md](walkthroughs/m7-websockets-code-walkthrough.md)
+§4. Permanently automated: `realtime.gateway.spec.ts` — handshake auth (reject-no-token,
+reject-malformed-token, accept-valid-token), room-targeted delivery, bounded token-expiry
+disconnect, and immediate force-disconnect on revocation (`TR-DEC-031`) — against a real
+listening app and a real `socket.io-client`, all passing.
+
+**Hardened post-ship (`TR-DEC-031`).** The original handshake decision left "does a revoked or
+expired token close an already-open socket" as a named gap — restated precisely, that gap was
+*unbounded* exposure, not merely "up to 15 minutes stale" (a REST call re-checks `exp` on every
+request; a WebSocket that's never re-asked has no such cap). Closed with two mechanisms: a timer
+scheduled from the token's own `exp` claim at connect time, and an immediate
+`RealtimeService.disconnectUser()` push on real revocation (logout, reuse-detected theft),
+reached via `AuthService.revokeFamily()`. Required extracting the shared JWT config
+(`config/jwt-module.options.ts`) to avoid a module-import cycle once `AuthModule` needed
+`RealtimeService`.
+
+**Docs.** [concepts/07-websockets-and-realtime.md](concepts/07-websockets-and-realtime.md) — the
+HTTP upgrade handshake; WebSocket vs SSE vs polling; rooms; the two-instance problem and exactly
+what the Redis adapter changes; handshake-vs-per-message auth; presence; connection limits.
+[walkthroughs/m7-websockets-code-walkthrough.md](walkthroughs/m7-websockets-code-walkthrough.md) —
+code-level trace, the real two-instance transcript, and a UUID-validation gotcha the test suite's
+own fixture data hit.
 
 ---
 

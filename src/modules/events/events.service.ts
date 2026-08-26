@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { CacheService } from '../../cache/cache.service';
 import { buildPaginatedResponse, PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PaginatedResponse } from '../../common/types/api-envelope';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { FindEventsQueryDto } from './dto/find-events-query.dto';
@@ -48,6 +49,7 @@ export class EventsService {
     @InjectRepository(Event)
     private readonly events: Repository<Event>,
     private readonly cache: CacheService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   async create(dto: CreateEventDto, organiserId: string): Promise<Event> {
@@ -181,6 +183,17 @@ export class EventsService {
     // cached listing page.
     await this.cache.invalidate(`cache:event:${id}`);
     await this.cache.bumpVersion(EVENTS_LIST_CACHE_NAMESPACE);
+
+    // Only `totalTickets` changing moves `ticketsRemaining` — a title/venue/price edit leaves
+    // availability untouched, so broadcasting on every update would just be noise nobody watching
+    // the live count needs to see.
+    if (dto.totalTickets !== undefined) {
+      this.realtime.broadcastAvailability({
+        eventId: saved.id,
+        ticketsRemaining: saved.ticketsRemaining,
+        isSoldOut: saved.isSoldOut,
+      });
+    }
 
     return saved;
   }

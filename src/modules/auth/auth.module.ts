@@ -5,6 +5,8 @@ import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AppConfig } from '../../config/configuration';
+import { jwtModuleOptions } from '../../config/jwt-module.options';
+import { RealtimeModule } from '../../realtime/realtime.module';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -20,17 +22,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService<AppConfig, true>) => ({
-        secret: config.get('auth.accessSecret', { infer: true }),
-        signOptions: {
-          expiresIn: config.get('auth.accessExpiresIn', { infer: true }),
-          // Stated explicitly rather than relying on the library default, so the signing and
-          // verifying sides visibly agree. JwtStrategy pins the same value — the whole point of
-          // pinning is that it is not inferred from the token being validated.
-          algorithm: 'HS256',
-        },
-      }),
+      useFactory: (config: ConfigService<AppConfig, true>) => jwtModuleOptions(config),
     }),
+    // For `AuthService` to force-disconnect a user's live WebSocket(s) the instant their session
+    // is genuinely revoked (logout, reuse-detected theft) — TR-DEC-031. One-directional:
+    // `RealtimeModule` does NOT import `AuthModule` back (it configures its own identical
+    // `JwtModule` via the same `jwtModuleOptions` factory), so this stays a plain DAG.
+    RealtimeModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, PasswordService, JwtStrategy],

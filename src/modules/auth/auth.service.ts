@@ -6,6 +6,7 @@ import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { IsNull, Repository } from 'typeorm';
 
 import { AppConfig } from '../../config/configuration';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { User, UserRole } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AuthResponseDto } from './dto/auth-response.dto';
@@ -30,6 +31,10 @@ export class AuthService {
     private readonly config: ConfigService<AppConfig, true>,
     @InjectRepository(RefreshToken)
     private readonly refreshTokens: Repository<RefreshToken>,
+    // TR-DEC-031: force-closes a user's live WebSocket(s) the instant their session is actually
+    // killed, rather than leaving `RealtimeGateway`'s own bounded-expiry timer as the only thing
+    // that will eventually close it.
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -143,7 +148,7 @@ export class AuthService {
         //
         // This does log out the legitimate user too. That is the correct tradeoff — a session
         // that may be compromised should end, and the cost is one re-login.
-        await this.revokeFamily(stored.familyId, RevocationReason.ReuseDetected);
+        await this.revokeFamily(stored.familyId, stored.userId, RevocationReason.ReuseDetected);
         this.logger.warn(
           `Refresh token reuse detected for user ${stored.userId} ` +
             `(family ${stored.familyId}, ${Math.round(elapsedMs / 1000)}s after rotation). ` +
@@ -171,7 +176,7 @@ export class AuthService {
     const user = await this.users.findById(stored.userId);
     if (!user) {
       // The user was deleted while a live session existed.
-      await this.revokeFamily(stored.familyId, RevocationReason.Logout);
+      await this.revokeFamily(stored.familyId, stored.userId, RevocationReason.Logout);
       throw new UnauthorizedException('Session revoked');
     }
 
@@ -202,22 +207,33 @@ export class AuthService {
     // retrying, or logging out twice, should not see an error for an action whose goal —
     // "this session is gone" — is already satisfied.
     if (stored) {
-      await this.revokeFamily(stored.familyId, RevocationReason.Logout);
+      await this.revokeFamily(stored.familyId, stored.userId, RevocationReason.Logout);
       this.logger.log(`Logged out user ${stored.userId} (family ${stored.familyId})`);
     }
   }
 
   /**
-   * Kills every live token in the family.
+   * Kills every live token in the family — and, per `TR-DEC-031`, tells `RealtimeService` to
+   * close this user's live WebSocket(s) immediately rather than leaving them open until their
+   * token's own bounded expiry timer eventually fires.
    *
    * `reason` is not decoration — it is what stops a revoked family being resurrected by the
-   * grace window. Only `Rotated` is eligible for grace; `ReuseDetected` and `Logout` are final.
+   * grace window. Only `Rotated` is eligible for grace; `ReuseDetected` and `Logout` are final —
+   * and, not coincidentally, `Rotated` is the ONE case that never calls this method at all (a
+   * normal refresh marks the single spent token inline, in `refresh()`, without touching the rest
+   * of the family). Every caller of `revokeFamily` is therefore already "this session should end
+   * now," which is exactly the condition under which force-disconnecting sockets is correct.
    */
-  private async revokeFamily(familyId: string, reason: RevocationReason): Promise<void> {
+  private async revokeFamily(
+    familyId: string,
+    userId: string,
+    reason: RevocationReason,
+  ): Promise<void> {
     await this.refreshTokens.update(
       { familyId, revokedAt: IsNull() },
       { revokedAt: new Date(), revokedReason: reason },
     );
+    this.realtime.disconnectUser(userId);
   }
 
   private async issueTokens(user: User, familyId: string): Promise<AuthResponseDto> {

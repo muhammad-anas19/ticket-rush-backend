@@ -16,6 +16,7 @@ import { HoldsModule } from './modules/holds/holds.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { UsersModule } from './modules/users/users.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { RedisModule } from './redis/redis.module';
 
 @Module({
@@ -50,9 +51,9 @@ import { RedisModule } from './redis/redis.module';
     HoldsModule,
     OrdersModule,
     PaymentsModule,
+    RealtimeModule,
 
-    // M6: MessagingModule, TicketsModule
-    // M7: RealtimeModule
+    // M6 (paused, TR-DEC-030): MessagingModule, TicketsModule
   ],
   providers: [
     /**

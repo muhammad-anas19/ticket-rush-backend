@@ -2,6 +2,7 @@ import Redis from 'ioredis';
 import { DataSource } from 'typeorm';
 
 import { buildDataSourceOptions } from '../../../database/data-source';
+import { RealtimeService } from '../../../realtime/realtime.service';
 import { Event } from '../../events/entities/event.entity';
 import { User, UserRole } from '../../users/entities/user.entity';
 import { TicketHold } from '../entities/ticket-hold.entity';
@@ -38,7 +39,11 @@ describe('Holds concurrency — the oversell experiment', () => {
       host: process.env.REDIS_HOST ?? 'localhost',
       port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
     });
-    holds = new HoldsService(dataSource, redis);
+    // No `.setServer()` call — this suite proves the concurrency mechanism, not the M7 broadcast,
+    // so RealtimeService is left un-initialised and simply no-ops (with a logged warning) on every
+    // `broadcastAvailability()` call, exactly as it would in production before the gateway finishes
+    // booting.
+    holds = new HoldsService(dataSource, redis, new RealtimeService());
 
     // Deterministic organiser, reused across runs rather than created fresh each time — a unique
     // constraint violation on re-running the suite would be a false failure unrelated to concurrency.

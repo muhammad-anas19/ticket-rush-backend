@@ -26,18 +26,9 @@ export class EventsController {
       'allow-list because ORDER BY cannot be parameterised.',
   })
   async findAll(@Query() query: FindEventsQueryDto) {
-    // Already DTO-shaped by the service — findAll is cache-aside from M4 onward, and what's
-    // cached is a plain projection, not an `Event` entity, so there is nothing left to map here.
     return this.events.findAll(query);
   }
 
-  /**
-   * Declared BEFORE `:id`, and the order matters.
-   *
-   * Nest matches routes in declaration order, so if `@Get(':id')` came first it would match `/events/mine`
-   * with `id = 'mine'`, and ParseUUIDPipe would reject it as a malformed UUID — a 400 on a route that
-   * exists. This class of bug is entirely invisible until someone adds the literal route second.
-   */
   @Get('mine')
   @Roles(UserRole.Organiser)
   @ApiBearerAuth('access-token')
@@ -55,11 +46,7 @@ export class EventsController {
   @Get(':id')
   @ApiOperation({ summary: 'Event detail', description: 'Public. Includes live availability.' })
   @ApiResponse({ status: 404, description: 'No such event' })
-  // ParseUUIDPipe rejects a malformed id with 400 before the service runs. Without it, Postgres receives
-  // a non-UUID for a uuid column and raises a driver error that surfaces as a 500 — an input problem
-  // reported as a server fault.
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    // Same reasoning as findAll — the service returns an EventResponseDto directly.
     return this.events.findOne(id);
   }
 

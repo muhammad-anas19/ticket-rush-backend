@@ -13,7 +13,6 @@ import { AuthResponseDto } from './dto/auth-response.dto';
 import { RefreshToken, RevocationReason } from './entities/refresh-token.entity';
 import { PasswordService } from './password.service';
 
-/** Claims carried in the access token. Readable by anyone — signed, not encrypted. */
 export interface AccessTokenPayload {
   sub: string;
   email: string;
@@ -31,32 +30,11 @@ export class AuthService {
     private readonly config: ConfigService<AppConfig, true>,
     @InjectRepository(RefreshToken)
     private readonly refreshTokens: Repository<RefreshToken>,
-    // TR-DEC-031: force-closes a user's live WebSocket(s) the instant their session is actually
-    // killed, rather than leaving `RealtimeGateway`'s own bounded-expiry timer as the only thing
-    // that will eventually close it.
     private readonly realtime: RealtimeService,
   ) {}
 
-  /**
-   * Creates the account and returns the user. **Deliberately does NOT issue a session.**
-   *
-   * It used to return a token pair, which seemed friendly — sign the user straight in without a
-   * second round trip. It was a leak, found by querying the database after a sign-out.
-   *
-   * The frontend cannot use those tokens: NextAuth only establishes a session through its own
-   * `authorize()` callback, so `RegisterForm` registers and then calls `signIn()`, discarding
-   * whatever register returned. That discarded pair was a **live refresh-token family nobody held
-   * and nothing would ever revoke** — logout revokes the family of the token it is given, which is
-   * the sign-in family, so the register family survived its full 7 days. Every single signup leaked
-   * one.
-   *
-   * Issuing a credential that no client consumes is strictly a liability. If a future non-NextAuth
-   * client wants auto-login on signup, it should call `/auth/login` — the endpoint that exists for it.
-   */
   async register(email: string, password: string, role: UserRole): Promise<User> {
     const passwordHash = await this.passwords.hash(password);
-    // Throws 409 on the unique constraint. Registration necessarily reveals that an address is
-    // taken — the user has to be told why it failed. Login is where enumeration is prevented.
     const user = await this.users.create(email, passwordHash, role);
 
     this.logger.log(`Registered ${user.id} as ${user.role}`);
@@ -67,49 +45,23 @@ export class AuthService {
     const user = await this.users.findByEmail(email);
 
     if (!user) {
-      // Burn equivalent CPU before failing.
-      //
-      // Returning immediately here would make login a timing oracle: unknown address responds
-      // in ~2ms, known address in ~250ms, so an attacker with a wordlist maps registered users
-      // without guessing a single password. A generic error MESSAGE does not close that — the
-      // timing is the leak, and it is measurable over a network.
-      //
-      // Cost: this makes the DoS on this endpoint worse, since every request now pays for a
-      // hash. Rate limiting is the layer that resolves it, and TR-DEC-004 cut it. Known,
-      // recorded, open.
       await this.passwords.verifyDummy(password);
       throw new UnauthorizedException('Invalid email or password');
     }
 
     const valid = await this.passwords.verify(password, user.passwordHash);
     if (!valid) {
-      // Identical message and identical timing to the unknown-email branch. The caller cannot
-      // tell which of the two failed, which is the entire point.
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // A new family per login: each device/session gets an independent chain, so revoking one
-    // compromised session does not log the user out of the others.
     return this.issueTokens(user, randomUUID());
   }
 
-  /**
-   * Rotate a refresh token.
-   *
-   * Three outcomes, and the middle one is TR-DEC-017:
-   *
-   *   live token          → rotate normally
-   *   spent, within grace → rotate anyway, log a warning  (legitimate client, lost response
-   *                         or parallel refresh)
-   *   spent, past grace   → REUSE DETECTED, revoke the whole family
-   */
   async refresh(rawToken: string): Promise<AuthResponseDto> {
     const tokenHash = AuthService.hashToken(rawToken);
     const stored = await this.refreshTokens.findOne({ where: { tokenHash } });
 
     if (!stored) {
-      // Never issued, or issued so long ago it was pruned. Nothing to revoke — there is no
-      // family to attribute this to, so this is not evidence of theft, just an invalid token.
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -121,16 +73,6 @@ export class AuthService {
       const graceMs = this.config.get('auth.refreshGraceSeconds', { infer: true }) * 1000;
       const elapsedMs = Date.now() - stored.revokedAt.getTime();
 
-      /**
-       * Grace applies ONLY to a token spent by a normal rotation.
-       *
-       * This guard is the fix for a real bug: with `revokedAt` alone, a family killed by reuse
-       * detection could be RESURRECTED by presenting any of its tokens within the next 30
-       * seconds — the revocation timestamp was fresh, so the grace branch happily issued a new
-       * pair. Logout had the identical hole.
-       *
-       * A token revoked for cause is permanently dead, regardless of how recently.
-       */
       if (stored.revokedReason !== RevocationReason.Rotated) {
         this.logger.warn(
           `Refresh attempted on a token revoked for cause ` +
@@ -140,14 +82,6 @@ export class AuthService {
       }
 
       if (elapsedMs > graceMs) {
-        // Past the window. Treat as theft.
-        //
-        // Revoke the whole FAMILY, not just this token: whoever replayed this already has its
-        // successor, so killing one link achieves nothing. Ending the chain is the only response
-        // that actually terminates a compromised session.
-        //
-        // This does log out the legitimate user too. That is the correct tradeoff — a session
-        // that may be compromised should end, and the cost is one re-login.
         await this.revokeFamily(stored.familyId, stored.userId, RevocationReason.ReuseDetected);
         this.logger.warn(
           `Refresh token reuse detected for user ${stored.userId} ` +
@@ -157,16 +91,6 @@ export class AuthService {
         throw new UnauthorizedException('Session revoked');
       }
 
-      // Inside the window — almost certainly legitimate.
-      //
-      // Either the response carrying the replacement never arrived (sleeping laptop, dropped
-      // connection) or several NextAuth `jwt` callbacks refreshed concurrently and this one
-      // lost the race. Both are indistinguishable from theft on the wire, so we choose which
-      // error to prefer: a false logout is a certain harm to a real user, a 30-second replay
-      // window is a bounded risk.
-      //
-      // Logged at warn, not silently: a spike here means something is wrong with the client's
-      // refresh coordination, and you want to see it.
       this.logger.warn(
         `Refresh inside grace window for user ${stored.userId} ` +
           `(family ${stored.familyId}, ${elapsedMs}ms after rotation). Issuing a new pair.`,
@@ -175,19 +99,10 @@ export class AuthService {
 
     const user = await this.users.findById(stored.userId);
     if (!user) {
-      // The user was deleted while a live session existed.
       await this.revokeFamily(stored.familyId, stored.userId, RevocationReason.Logout);
       throw new UnauthorizedException('Session revoked');
     }
 
-    // Mark spent BEFORE issuing the replacement, so a crash between the two leaves the old
-    // token dead rather than leaving two live tokens.
-    //
-    // Not yet transactional: `revokedAt` and the new row are two statements. If the process
-    // dies between them the family has no live token and the user must log in again — annoying,
-    // not incorrect. Wrapping both in one transaction is the right fix and is exactly the
-    // discipline M3 makes non-negotiable, where the failure mode is oversold tickets rather
-    // than an extra login.
     if (!stored.revokedAt) {
       stored.revokedAt = new Date();
       stored.revokedReason = RevocationReason.Rotated;
@@ -197,33 +112,17 @@ export class AuthService {
     return this.issueTokens(user, stored.familyId);
   }
 
-  /** Revokes every live token in the family — the "log out" path. */
   async logout(rawToken: string): Promise<void> {
     const stored = await this.refreshTokens.findOne({
       where: { tokenHash: AuthService.hashToken(rawToken) },
     });
 
-    // Deliberately does not throw on an unknown token. Logout must be idempotent: a client
-    // retrying, or logging out twice, should not see an error for an action whose goal —
-    // "this session is gone" — is already satisfied.
     if (stored) {
       await this.revokeFamily(stored.familyId, stored.userId, RevocationReason.Logout);
       this.logger.log(`Logged out user ${stored.userId} (family ${stored.familyId})`);
     }
   }
 
-  /**
-   * Kills every live token in the family — and, per `TR-DEC-031`, tells `RealtimeService` to
-   * close this user's live WebSocket(s) immediately rather than leaving them open until their
-   * token's own bounded expiry timer eventually fires.
-   *
-   * `reason` is not decoration — it is what stops a revoked family being resurrected by the
-   * grace window. Only `Rotated` is eligible for grace; `ReuseDetected` and `Logout` are final —
-   * and, not coincidentally, `Rotated` is the ONE case that never calls this method at all (a
-   * normal refresh marks the single spent token inline, in `refresh()`, without touching the rest
-   * of the family). Every caller of `revokeFamily` is therefore already "this session should end
-   * now," which is exactly the condition under which force-disconnecting sockets is correct.
-   */
   private async revokeFamily(
     familyId: string,
     userId: string,
@@ -238,22 +137,13 @@ export class AuthService {
 
   private async issueTokens(user: User, familyId: string): Promise<AuthResponseDto> {
     const payload: AccessTokenPayload = {
-      // `sub` is the registered JWT claim for subject. Using the standard name rather than
-      // `userId` means any JWT tooling understands it.
       sub: user.id,
       email: user.email,
-      // Embedded, so authorisation needs no database read — at the cost of going stale until
-      // the token expires. Deliberate: 15 minutes of staleness on a two-value role that changes
-      // essentially never. A token_version column would make it immediate for one integer
-      // compare, and is the upgrade path if roles ever become mutable.
       role: user.role,
     };
 
     const accessToken = await this.jwt.signAsync(payload);
 
-    // 32 bytes from a CSPRNG. NOT a JWT — there is nothing to read in a refresh token, so
-    // signing it would only add size. Opaque means the server is the sole authority on whether
-    // it is valid, which is exactly what makes revocation possible.
     const rawRefreshToken = randomBytes(32).toString('base64url');
 
     const refreshExpiresDays = this.config.get('auth.refreshExpiresDays', { infer: true });
@@ -279,9 +169,6 @@ export class AuthService {
       },
       accessToken,
       refreshToken: rawRefreshToken,
-      // Given to the client so NextAuth's `jwt` callback can refresh proactively instead of
-      // waiting for a 401. Decoding the JWT to find `exp` would work too, but handing it over
-      // means the client never has to parse a token it should treat as opaque.
       accessTokenExpiresAt: this.accessTokenExpiryMs(),
     };
   }
@@ -296,16 +183,6 @@ export class AuthService {
     return Date.now() + parseInt(match[1], 10) * multipliers[match[2]];
   }
 
-  /**
-   * SHA-256, hex. A FAST hash, and that is correct.
-   *
-   * The token is 32 bytes of CSPRNG output — there is no guessable structure, so there is
-   * nothing for a slow hash to slow down. bcrypt here would spend 250ms of CPU on every refresh
-   * and buy precisely nothing. Slow hashes exist for LOW-ENTROPY secrets, where the attack is
-   * guessing. Being able to state that distinction is the point.
-   *
-   * Hashed at all so a database dump does not hand over working sessions.
-   */
   private static hashToken(raw: string): string {
     return createHash('sha256').update(raw).digest('hex');
   }

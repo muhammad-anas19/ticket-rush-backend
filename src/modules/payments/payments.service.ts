@@ -28,28 +28,13 @@ export class PaymentsService {
   constructor(
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
     private readonly dataSource: DataSource,
-    // M7: only the TR-DEC-011 re-commit path changes `tickets_committed` — the common
-    // "converted" path doesn't move the number at all (M3 already counted it), so only that one
-    // branch has anything worth broadcasting.
     private readonly realtime: RealtimeService,
   ) {}
 
-  /**
-   * Pure local HMAC verification — no network call to Stripe happens here, which is exactly
-   * why a tampered signature fails immediately rather than after a round trip. Throws
-   * `Stripe.errors.StripeSignatureVerificationError` on any mismatch; the controller maps that
-   * straight to 400.
-   */
   constructEvent(rawBody: Buffer, signature: string, webhookSecret: string): Stripe.Event {
     return this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
   }
 
-  /**
-   * Dispatches by event type. Everything this project has no opinion about is acknowledged
-   * (200) and ignored — Stripe sends dozens of event types, and a webhook endpoint's job is to
-   * react to what it knows, not reject what it doesn't (that would just make Stripe retry an
-   * event that will never be understood, forever).
-   */
   async handleEvent(event: Stripe.Event): Promise<void> {
     if (event.type !== 'checkout.session.completed') {
       this.logger.debug(`Ignoring unhandled event type: ${event.type}`);
@@ -63,9 +48,6 @@ export class PaymentsService {
     }
 
     if (outcome.kind === 'recommitted') {
-      // Broadcast AFTER the transaction committed, same placement as HoldsService's own
-      // post-commit broadcasts — a WebSocket emit is an external call, never something that
-      // belongs inside a transaction holding a row lock.
       const { eventId, ticketsCommitted, totalTickets } = outcome.availability;
       const ticketsRemaining = totalTickets - ticketsCommitted;
       this.realtime.broadcastAvailability({
@@ -76,39 +58,6 @@ export class PaymentsService {
     }
   }
 
-  /**
-   * `TR-DEC-008`'s mechanism, exactly: the dedupe insert and the fulfilment writes share ONE
-   * transaction, so a unique violation on `processed_events` can only mean a COMMITTED
-   * fulfilment already happened — never a half-finished one.
-   *
-   * Uses `INSERT ... ON CONFLICT DO NOTHING` (TypeORM's `.orIgnore()`), not a caught
-   * unique-violation exception. That distinction matters specifically under Postgres: an error
-   * raised by ANY statement mid-transaction poisons the rest of it — every following statement
-   * fails with "current transaction is aborted" until a ROLLBACK, so catching the error and
-   * continuing on the same connection would not work without a SAVEPOINT. `ON CONFLICT DO
-   * NOTHING` never raises in the first place; a duplicate simply inserts zero rows, and the
-   * transaction carries on normally.
-   *
-   * ─── The bug this caught: `identifiers`, not `raw`, is the signal to check ───
-   *
-   * The first version of this method checked `insertResult.identifiers.length === 0` to detect
-   * a duplicate. That is ALWAYS length 1 here, insert or not — confirmed empirically with a
-   * throwaway script, not assumed. TypeORM builds `identifiers` from the entity's primary-key
-   * VALUES, and for a column that is not database-generated — `stripeEventId` is a plain
-   * string, Stripe's own id, not a serial or a UUID default — there is nothing for TypeORM to
-   * have generated and reported back, so it just echoes what was passed into `.values()`
-   * regardless of whether Postgres actually inserted a row or silently discarded it on
-   * conflict. Checking it made every redelivered webhook look identical to a fresh one:
-   * duplicate events were silently REPROCESSED — the exact failure this whole mechanism exists
-   * to prevent — behind a check that read reasonably and compiled cleanly.
-   *
-   * `insertResult.raw` is the real signal: it holds whatever Postgres's own `RETURNING` clause
-   * actually returned — one row on a genuine insert, an empty array when `ON CONFLICT DO
-   * NOTHING` fired. `raw.length === 0` is the correct check. Worth remembering as the general
-   * rule: for an entity with a database-GENERATED key, `identifiers` happens to be reliable
-   * too, because there the generated value can only ever come from a real insert. The moment a
-   * primary key is caller-supplied, as here, that guarantee is gone.
-   */
   private async handleCheckoutCompleted(event: Stripe.Event): Promise<FulfilmentOutcome> {
     const session = event.data.object as Stripe.Checkout.Session;
     const { holdId, orderId } = session.metadata ?? {};
@@ -141,9 +90,6 @@ export class PaymentsService {
       const hold = await manager.findOne(TicketHold, { where: { id: holdId } });
 
       if (hold && hold.status === HoldStatus.Active && !hold.isExpired) {
-        // Common path: nothing expired between checkout and payment. `Event.ticketsCommitted`
-        // already counts this hold's quantity (M3) — paying just converts the reservation, it
-        // does not commit inventory a second time.
         hold.status = HoldStatus.Converted;
         await manager.save(hold);
         order.status = OrderStatus.Paid;
@@ -152,12 +98,6 @@ export class PaymentsService {
         return { kind: 'converted' };
       }
 
-      // TR-DEC-011: the hold expired (or is simply gone) before payment completed, and its
-      // inventory was already released back to availability by the same release/sweep path
-      // M3 built. Re-run the IDENTICAL atomic conditional UPDATE `HoldsService.create()` uses:
-      // if the seat is still free, take it; if someone else has it now, there is nothing left
-      // to sell, and the payment must be refunded rather than kept for a seat that no longer
-      // exists.
       const [rows] = await manager.query<
         [Array<{ tickets_committed: number; total_tickets: number }>, number]
       >(
@@ -196,15 +136,6 @@ export class PaymentsService {
     });
   }
 
-  /**
-   * Deliberately OUTSIDE the transaction above. A refund is a network call to Stripe — exactly
-   * what `HoldsService.create()`'s own comment warns never belongs inside a transaction holding
-   * a row lock — and it carries the same "external call after a commit can fail with nothing to
-   * retry it" gap `TR-DEC-012` already names for M6's publish step. Logged loudly rather than
-   * silently swallowed; a queued retry would close this properly, which is exactly why
-   * `TR-DEC-012` leaves that decision for M6 rather than solving it twice, once here and once
-   * there.
-   */
   private async issueRefund(session: Stripe.Checkout.Session, order: Order): Promise<void> {
     const paymentIntentId =
       typeof session.payment_intent === 'string'

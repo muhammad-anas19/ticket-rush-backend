@@ -9,18 +9,6 @@ import { User, UserRole } from '../../users/entities/user.entity';
 import { ProcessedEvent } from '../entities/processed-event.entity';
 import { PaymentsService } from '../payments.service';
 
-/**
- * Real Postgres, same as the M3 concurrency suite and the M4 cache suite — this is money logic,
- * and the whole point of `TR-DEC-008`'s dedupe mechanism is a guarantee about what a REAL unique
- * constraint does under a REAL transaction. A mocked repository would not exercise the one thing
- * this file exists to prove.
- *
- * Only the Stripe CLIENT is fake, and only its `refunds.create` method — this suite never makes a
- * real network call to Stripe, and never needs to: `constructEvent` (signature verification) is
- * pure local HMAC and is exercised separately; everything here calls `handleEvent()` directly with
- * a synthetic `Stripe.Event`-shaped object, which is exactly what `constructEvent` would have
- * handed back after a real signature check passed.
- */
 describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () => {
   let dataSource: DataSource;
   let organiserId: string;
@@ -33,8 +21,6 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
     >[0];
   }
 
-  // No `.setServer()` — this suite proves fulfilment/dedupe, not the M7 broadcast, so
-  // `broadcastAvailability()` simply no-ops (with a logged warning) on every call here.
   function makePayments(refundsCreate?: jest.Mock): PaymentsService {
     return new PaymentsService(fakeStripe(refundsCreate), dataSource, new RealtimeService());
   }
@@ -69,7 +55,6 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
   });
 
   afterAll(async () => {
-    // FK order matters: orders/holds RESTRICT their event, so they must go first.
     if (seededEventIds.length > 0) {
       await dataSource.query(`DELETE FROM orders WHERE event_id = ANY($1)`, [seededEventIds]);
       await dataSource.query(`DELETE FROM ticket_holds WHERE event_id = ANY($1)`, [seededEventIds]);
@@ -78,7 +63,6 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
     await dataSource.destroy();
   });
 
-  /** Every fixture returns { event, hold, order, stripeEventId } — a fresh, isolated scenario. */
   async function seedScenario(options: {
     totalTickets: number;
     ticketsCommitted: number;
@@ -171,8 +155,8 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
   it('TR-DEC-011: re-commits inventory and marks the order paid when the hold expired but a seat is still free', async () => {
     const { event, hold, order } = await seedScenario({
       totalTickets: 10,
-      ticketsCommitted: 3, // 3 committed by OTHER holds — 7 genuinely free
-      holdStatus: HoldStatus.Expired, // the sweeper already released THIS hold's own seat
+      ticketsCommitted: 3,
+      holdStatus: HoldStatus.Expired,
       holdExpired: true,
     });
     const payments = makePayments();
@@ -184,15 +168,13 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
     const orders = dataSource.getRepository(Order);
     const events = dataSource.getRepository(Event);
     expect((await orders.findOneOrFail({ where: { id: order.id } })).status).toBe(OrderStatus.Paid);
-    // Re-committed: one MORE ticket than the pre-existing 3, since this order's seat had already
-    // been released and had to be re-taken via the same atomic conditional UPDATE as M3.
     expect((await events.findOneOrFail({ where: { id: event.id } })).ticketsCommitted).toBe(4);
   });
 
   it('TR-DEC-011: refunds when the hold expired AND the seat was taken by someone else', async () => {
     const { hold, order } = await seedScenario({
       totalTickets: 5,
-      ticketsCommitted: 5, // genuinely sold out — no seat left to re-commit
+      ticketsCommitted: 5,
       holdStatus: HoldStatus.Expired,
       holdExpired: true,
     });
@@ -221,7 +203,6 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
     const stripeEventId = `evt_dupe_${hold.id}`;
 
     await payments.handleEvent(checkoutCompletedEvent(stripeEventId, hold.id, order.id));
-    // Redelivered — same event.id, exactly as Stripe's own retry behaviour produces.
     await payments.handleEvent(checkoutCompletedEvent(stripeEventId, hold.id, order.id));
 
     const processed = await dataSource
@@ -234,10 +215,6 @@ describe('PaymentsService — webhook fulfilment (TR-DEC-008, TR-DEC-011)', () =
       HoldStatus.Converted,
     );
 
-    // The regression this test caught for real during development: a broken dedupe check let
-    // the SECOND call fall through past the (already non-Active) hold and into the TR-DEC-011
-    // "re-commit" branch, incrementing tickets_committed a second time for one paid order. If
-    // dedup is working, this stays exactly where the first call left it.
     const events = dataSource.getRepository(Event);
     expect((await events.findOneOrFail({ where: { id: event.id } })).ticketsCommitted).toBe(1);
   });

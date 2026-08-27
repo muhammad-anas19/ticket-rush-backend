@@ -2,10 +2,6 @@ import { ApiProperty } from '@nestjs/swagger';
 
 import { HoldStatus, TicketHold } from '../entities/ticket-hold.entity';
 
-/**
- * An explicit projection, not the entity — same reasoning as `EventResponseDto`. Nothing published
- * to a client should be a side effect of what columns happen to exist on the table.
- */
 export class HoldResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;

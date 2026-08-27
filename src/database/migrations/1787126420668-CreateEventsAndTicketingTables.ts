@@ -1,37 +1,5 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-/**
- * M2 — the five domain tables: events, ticket_holds, orders, tickets, processed_events.
- *
- * Generated with `migration:generate`, then REVIEWED. Reading a generated migration before running it
- * is a standing convention here — the M1 one was missing a `CREATE EXTENSION` and would have failed on
- * a fresh database.
- *
- * What was checked this time:
- *
- *  - **`uuid_generate_v4()` is available.** Enabled by the M1 migration, so no extension line needed.
- *  - **Index column order matches real queries.** `idx_events_organiser_starts_at` exists as a separate
- *    index from `idx_events_starts_at` because the leftmost-prefix rule means one cannot serve the
- *    other: an index on `(starts_at)` is useless for filtering by `organiser_id`.
- *  - **Two PARTIAL unique indexes** on `orders` — `WHERE hold_id IS NOT NULL` and
- *    `WHERE stripe_session_id IS NOT NULL`. A plain unique index would allow only ONE row with a NULL
- *    in those columns; partial indexes let many orders have no hold or no session yet while still
- *    guaranteeing that a given hold or session maps to at most one order. That guarantee is what stops
- *    a double charge.
- *  - **`processed_events` has no surrogate id.** The Stripe event id IS the primary key, so the database
- *    itself enforces exactly-once processing — a unique violation is the mechanism, not an application
- *    `if` that two concurrent webhooks could both pass.
- *  - **FK delete behaviour is deliberate per relation**, not uniform: CASCADE where the child is
- *    meaningless without the parent (holds), RESTRICT where the child is a financial record that must
- *    outlive it (orders, tickets), SET NULL where history should survive (orders.hold_id).
- *  - **`down()` ordering** — FKs before tables, enum types after the tables using them. Reverse either
- *    and the rollback fails partway, leaving a half-reverted schema.
- *
- * Note every column here is created on EMPTY tables, so `NOT NULL` is free. Adding a NOT NULL column to
- * a populated table is the expensive case: it fails outright without a default, and pre-Postgres 11
- * rewrote the whole table under an ACCESS EXCLUSIVE lock.
- */
-
 export class CreateEventsAndTicketingTables1787126420668 implements MigrationInterface {
   name = 'CreateEventsAndTicketingTables1787126420668';
 

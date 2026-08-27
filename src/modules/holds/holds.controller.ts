@@ -15,11 +15,6 @@ import { CreateHoldDto } from './dto/create-hold.dto';
 import { HoldResponseDto } from './dto/hold-response.dto';
 import { HoldsService } from './holds.service';
 
-/**
- * No `@Roles()` on either route. Holding a ticket is not organiser-restricted — any authenticated
- * user may do it, attendee or organiser. The global `JwtAuthGuard` already requires SOME valid token
- * (fail-closed by default); that alone is the right amount of gating here.
- */
 @ApiTags('holds')
 @Controller()
 @ApiBearerAuth('access-token')
@@ -42,10 +37,6 @@ export class HoldsController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     const { hold, ticketsCommitted } = await this.holds.create(eventId, user.id, dto.quantity);
-    // ticketsCommitted came back from the SAME atomic UPDATE that created this hold — reading it
-    // separately would reopen exactly the race the UPDATE exists to close, if only for a display value.
-    // (An event with N total tickets doesn't need a second query to know remaining = total - committed;
-    // the caller already has `total` from GET /events/:id.)
     return HoldResponseDto.from(hold, ticketsCommitted);
   }
 

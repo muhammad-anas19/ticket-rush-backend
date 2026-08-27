@@ -2,18 +2,6 @@ import { ApiProperty } from '@nestjs/swagger';
 
 import { Event } from '../entities/event.entity';
 
-/**
- * The shape clients receive. An explicit projection, not the entity.
- *
- * Two reasons this is worth the extra file:
- *
- * 1. **Nothing leaks by accident.** Returning the entity means every column added to `events` later is
- *    automatically published, including ones nobody thought about. An explicit DTO makes exposure a
- *    decision each time.
- * 2. **The getters are computed here.** `ticketsRemaining` and `isSoldOut` are TypeScript getters on the
- *    entity, and getters do NOT survive `JSON.stringify` — so returning the entity directly would
- *    silently drop exactly the fields the UI needs most.
- */
 export class EventResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
@@ -65,7 +53,6 @@ export class EventResponseDto {
       priceCents: event.priceCents,
       totalTickets: event.totalTickets,
       ticketsCommitted: event.ticketsCommitted,
-      // Called explicitly, because a getter would vanish in serialisation.
       ticketsRemaining: event.ticketsRemaining,
       isSoldOut: event.isSoldOut,
       organiser: event.organiser

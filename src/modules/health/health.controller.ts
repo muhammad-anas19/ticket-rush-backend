@@ -5,29 +5,8 @@ import { HealthCheck, HealthCheckService, TypeOrmHealthIndicator } from '@nestjs
 import { Public } from '../../common/decorators/public.decorator';
 import { RedisHealthIndicator } from './indicators/redis.health';
 
-/**
- * Two probes, two different questions, two different remedies. Getting this wrong is how a
- * partial outage becomes a total one — see qa/phase-0 Q6.
- *
- * These routes are excluded from the global `/api` prefix (see main.ts) because ops tooling
- * expects health checks at conventional unprefixed paths.
- *
- * They DO go through the standard response envelope, like everything else. An earlier version
- * opted out with `@SkipEnvelope()` plus a controller-scoped filter, to preserve Terminus's own
- * output shape for probes written against it. That was dropped in favour of one contract with no
- * exceptions: Terminus's result now arrives nested — under `data` on success, under `details` on
- * failure — and a probe reads `data.status` rather than `status`.
- *
- * The tradeoff is small because probes overwhelmingly key on the HTTP STATUS CODE, which is
- * unchanged: 200 healthy, 503 not. What the special case bought was compatibility with tooling
- * that parses the body verbatim; what it cost was two mechanisms and an endpoint whose shape
- * differed from every other one.
- */
 @ApiTags('health')
 @Controller('health')
-// Required from M1, because JwtAuthGuard is now global and fails closed. A liveness probe that
-// needed a Bearer token would be useless — an orchestrator has no credentials, so every instance
-// would look dead and be restarted forever. Health checks are the canonical @Public() route.
 @Public()
 export class HealthController {
   constructor(
@@ -36,21 +15,6 @@ export class HealthController {
     private readonly redis: RedisHealthIndicator,
   ) {}
 
-  /**
-   * Liveness — "is this process irrecoverably broken; should you restart me?"
-   *
-   * Deliberately checks NOTHING external. This looks uselessly trivial and is correct
-   * precisely because it is.
-   *
-   * If liveness checked dependencies, then the moment RabbitMQ or Postgres went down every
-   * instance would fail liveness at once, the orchestrator would kill and restart all of
-   * them, restarting would fix nothing because the dependency is still down, and they would
-   * fail again — a restart storm. The whole API is then down because of a single dependency
-   * outage, the restarts hammer that dependency while it tries to recover, and the health
-   * check itself has caused a worse incident than the fault did.
-   *
-   * Liveness answers one thing: is the event loop alive enough to reply.
-   */
   @Get('live')
   @ApiOperation({
     summary: 'Liveness probe',
@@ -62,34 +26,6 @@ export class HealthController {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
-  /**
-   * Readiness — "can this instance serve traffic right now?"
-   *
-   * Failing this deregisters the instance from the load balancer but leaves it running, and
-   * re-registers it on recovery. So the question is not "is everything up," it is
-   * **"can this instance serve the traffic it will actually receive?"**
-   *
-   *   Postgres — CHECKED. Every endpoint reads or writes it. Without it this instance
-   *              genuinely cannot serve, and taking it out of rotation is correct.
-   *
-   *   Redis    — CHECKED, but this is a judgement call rather than an obvious one. It is a
-   *              cache and TR-DEC-007 makes it authoritative for nothing, so losing it means
-   *              slower responses, not wrong ones. Included because from M4 the hold
-   *              countdown lives here and a cold Redis under real load would stampede
-   *              Postgres. Revisit if a Redis blip ever deregisters the whole fleet — that
-   *              would be this line's fault, and the fix is to drop it.
-   *
-   *   RabbitMQ — DELIBERATELY NOT CHECKED. Browsing events, viewing an event and reading
-   *              availability never touch the broker. Failing readiness on RabbitMQ would
-   *              pull every instance from the load balancer and stop users from even looking
-   *              at events, because checkout fulfilment is degraded. The correct response to
-   *              a broker outage is: keep serving, let the endpoints that need it fail
-   *              loudly, and page a human. Health probes drive automation; monitoring drives
-   *              people.
-   *
-   * That asymmetry looks like an oversight and is a decision, which is why it is written
-   * down here rather than only in a doc.
-   */
   @Get('ready')
   @HealthCheck()
   @ApiOperation({

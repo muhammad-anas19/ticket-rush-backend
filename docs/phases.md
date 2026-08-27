@@ -11,7 +11,7 @@ M3  ★ Holds & Concurrency — atomic conditional UPDATE, transaction disciplin
 M4  ★ Redis — cache-aside, TTL, invalidation, stampede, what we refuse to cache
 M5  ★ Stripe — Checkout, raw body, signature, in-transaction dedupe
 M6  ★ RabbitMQ — topic exchange, manual ack, idempotent consumers, DLQ, TTL+DLX     [PAUSED, TR-DEC-030]
-M7  ★ WebSockets — Socket.IO gateway, rooms, the two-instance failure, redis-adapter [BUILT NEXT]
+M7  ★ WebSockets — Socket.IO gateway, rooms, the two-instance failure, redis-adapter [SHIPPED; adapter unwired, TR-DEC-032]
 M8  Tests, CI, security review
 ```
 
@@ -294,6 +294,13 @@ through instance A was received by a client connected only to instance B, confir
 reject-malformed-token, accept-valid-token), room-targeted delivery, bounded token-expiry
 disconnect, and immediate force-disconnect on revocation (`TR-DEC-031`) — against a real
 listening app and a real `socket.io-client`, all passing.
+
+**Unwired post-checkpoint, deliberately (`TR-DEC-032`).** The redis-adapter proved the claim above
+and was then taken back OUT of `main.ts` — the API now runs on Nest's default single-instance
+adapter. Not a revert: `redis-io.adapter.ts`, its concepts section, and this checkpoint's transcript
+all stay as-is, ready to re-wire when a later scaling phase actually runs more than one instance.
+Until then, cross-instance broadcast and cross-instance forced-disconnect (`TR-DEC-031` mechanism 2)
+are back to local-instance-only — correct, since only one instance runs anywhere right now.
 
 **Hardened post-ship (`TR-DEC-031`).** The original handshake decision left "does a revoked or
 expired token close an already-open socket" as a named gap — restated precisely, that gap was

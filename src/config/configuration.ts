@@ -1,13 +1,5 @@
 import { NodeEnv } from './env.validation';
 
-/**
- * Typed, grouped view of the validated environment.
- *
- * Environment variable names are SCREAMING_SNAKE_CASE; the properties that read them are
- * camelCase and grouped by concern. Everything downstream reads `config.get('database.host')`
- * rather than `process.env.DATABASE_HOST`, so there is exactly one place where a raw
- * environment variable is touched — and it is a place that has already been validated.
- */
 export interface AppConfig {
   nodeEnv: NodeEnv;
   isProduction: boolean;

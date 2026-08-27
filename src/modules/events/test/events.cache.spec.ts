@@ -8,11 +8,6 @@ import { User, UserRole } from '../../users/entities/user.entity';
 import { Event } from '../entities/event.entity';
 import { EventsService } from '../events.service';
 
-/**
- * M4's checkpoint, per `docs/phases.md`: "a demonstrated stampede on a cold key." Real Postgres
- * and real Redis, like the M3 concurrency suite — a mocked cache would prove nothing about the
- * actual race this exists to close.
- */
 describe('Events cache — cache-aside, stampede, and the availability exclusion', () => {
   let dataSource: DataSource;
   let redis: Redis;
@@ -29,9 +24,6 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
       port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
     });
     cache = new CacheService(redis);
-    // No `.setServer()` — this suite proves cache-aside behaviour, not the M7 broadcast, so
-    // `broadcastAvailability()` (only reachable via `update()`, which none of these tests call
-    // with a `totalTickets` change) simply no-ops here.
     events = new EventsService(dataSource.getRepository(Event), cache, new RealtimeService());
 
     const users = dataSource.getRepository(User);
@@ -49,9 +41,6 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
   });
 
   afterAll(async () => {
-    // Every seeded row is created with an id in this set, regardless of what `update()` later
-    // renamed its title to — tracking ids rather than re-matching on title is what keeps this
-    // cleanup correct even for the rename test.
     if (seededEventIds.length > 0) {
       await dataSource.query(`DELETE FROM events WHERE id = ANY($1)`, [seededEventIds]);
     }
@@ -63,7 +52,6 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
     jest.restoreAllMocks();
   });
 
-  /** A fresh row (and therefore a fresh id, therefore a guaranteed-cold cache key) per test. */
   async function seedEvent(overrides: Partial<Event> = {}): Promise<Event> {
     const repo = dataSource.getRepository(Event);
     const event = await repo.save(
@@ -88,13 +76,9 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
     const first = await events.findOne(event.id);
     expect(first.ticketsRemaining).toBe(10);
 
-    // Bypasses the service entirely — simulates a hold committing inventory (M3's job) while this
-    // event's STATIC shape is sitting warm in Redis from the read above.
     await dataSource.query(`UPDATE events SET tickets_committed = $1 WHERE id = $2`, [4, event.id]);
 
     const second = await events.findOne(event.id);
-    // Title etc. came from the (still valid) cache; availability did not, and reflects the write
-    // that just happened outside the cache's knowledge entirely.
     expect(second.title).toBe(first.title);
     expect(second.ticketsCommitted).toBe(4);
     expect(second.ticketsRemaining).toBe(6);
@@ -116,9 +100,6 @@ describe('Events cache — cache-aside, stampede, and the availability exclusion
     const event = await seedEvent();
     const CONCURRENT_READERS = 25;
 
-    // Spies on the private fetch method rather than the query builder: `getLiveCommittedCounts`
-    // legitimately runs once per call (by design, availability is never cached), so counting ALL
-    // database access would hide the one number this test exists to prove.
     const dbFetchSpy = jest.spyOn(
       events as unknown as { fetchEventStaticFromDb: unknown },
       'fetchEventStaticFromDb' as never,

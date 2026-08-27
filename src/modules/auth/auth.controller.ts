@@ -34,8 +34,6 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  // 200, not 201. Login does not create a resource — it creates a session, which is not a thing
-  // you can GET at a URL. 201 would imply a Location header pointing at something.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Log in',

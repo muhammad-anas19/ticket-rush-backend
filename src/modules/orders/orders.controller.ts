@@ -42,12 +42,6 @@ export class OrdersController {
     return this.orders.createCheckoutSession(holdId, user.id);
   }
 
-  /**
-   * Declared BEFORE `:id`, and the order matters — same trap `EventsController` already names:
-   * Nest matches routes in declaration order, so `:id` first would swallow `/orders/mine` with
-   * `id = 'mine'`, and `ParseUUIDPipe` on the OTHER route would reject it as malformed — a 400 on
-   * a route that exists.
-   */
   @Get('orders/mine')
   @ApiOperation({
     summary: 'My order history (across every event), newest first',

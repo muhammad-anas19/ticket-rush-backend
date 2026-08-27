@@ -16,10 +16,6 @@ export class OrderEventSummaryDto {
   startsAt: Date;
 }
 
-/**
- * Explicit projection, same reasoning as `EventResponseDto`: an `Order` entity carries
- * `stripeSessionId` and FK columns nobody outside this module needs to see.
- */
 export class OrderResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;

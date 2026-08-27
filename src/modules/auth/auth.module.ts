@@ -24,16 +24,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       inject: [ConfigService],
       useFactory: (config: ConfigService<AppConfig, true>) => jwtModuleOptions(config),
     }),
-    // For `AuthService` to force-disconnect a user's live WebSocket(s) the instant their session
-    // is genuinely revoked (logout, reuse-detected theft) — TR-DEC-031. One-directional:
-    // `RealtimeModule` does NOT import `AuthModule` back (it configures its own identical
-    // `JwtModule` via the same `jwtModuleOptions` factory), so this stays a plain DAG.
     RealtimeModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, PasswordService, JwtStrategy],
-  // JwtStrategy is exported so the globally registered JwtAuthGuard can resolve the 'jwt'
-  // Passport strategy from anywhere in the app.
   exports: [AuthService, JwtStrategy],
 })
 export class AuthModule {}
